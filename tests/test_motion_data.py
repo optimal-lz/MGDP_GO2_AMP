@@ -19,28 +19,24 @@ def write_clip(path, value, frames=3, dt=0.02):
 
 
 class TestMotionData(unittest.TestCase):
-    def test_all_copied_clips_and_stage_groups(self):
+    def test_all_copied_clips_and_active_groups(self):
         import ast
         config_path = ROOT / "legged_gym/legged_gym/envs/go2_amp/config.py"
         assignments = {}
         for node in ast.parse(config_path.read_text(encoding="utf-8")).body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1:
                 target = node.targets[0]
-                if isinstance(target, ast.Name) and target.id.startswith("STAGE"):
+                if isinstance(target, ast.Name) and target.id.startswith("AMP_EXPERT"):
                     assignments[target.id] = ast.literal_eval(node.value)
         motion_files = {p.name for p in (ROOT / "datasets/go2_motion").glob("*.txt")}
         self.assertEqual(len(motion_files), 17)
-        self.assertEqual(assignments["STAGE1_GROUPS"], {
-            "stance": ["go2_stance.txt"],
-            "forward": ["go2_forward.txt", "go2_forward_fast.txt", "go2_forward_faster.txt"],
-        })
-        self.assertEqual(assignments["STAGE1_WEIGHTS"], {"stance": 0.25, "forward": 0.75})
-        self.assertEqual(sum(assignments["STAGE2_WEIGHTS"].values()), 1)
-        self.assertEqual(len({n for group in assignments["STAGE2_GROUPS"].values() for n in group}), 6)
-        MotionDataset(ROOT / "datasets/go2_motion", assignments["STAGE1_GROUPS"],
-                      assignments["STAGE1_WEIGHTS"], 0.02)
-        MotionDataset(ROOT / "datasets/go2_motion", assignments["STAGE2_GROUPS"],
-                      assignments["STAGE2_WEIGHTS"], 0.02)
+        self.assertEqual(assignments["AMP_EXPERT_GROUP_WEIGHTS"], {"forward": 0.8, "turn": 0.2})
+        enabled = {n for group in assignments["AMP_EXPERT_GROUPS"].values() for n in group}
+        self.assertEqual(len(enabled), 8)
+        self.assertNotIn("go2_stance.txt", enabled)
+        self.assertNotIn("go2_forward_faster.txt", enabled)
+        MotionDataset(ROOT / "datasets/go2_motion", assignments["AMP_EXPERT_GROUPS"],
+                      assignments["AMP_EXPERT_GROUP_WEIGHTS"], 0.02)
         for motion_file in sorted(motion_files):
             MotionDataset(ROOT / "datasets/go2_motion", {"clip": [motion_file]}, {"clip": 1.0}, 0.02)
 

@@ -1,188 +1,86 @@
-"""Source-level contract checks while Isaac Gym is unavailable locally."""
-
 import ast
 from pathlib import Path
-from types import SimpleNamespace
 import unittest
-
 
 ROOT = Path(__file__).resolve().parents[1] / "legged_gym"
 
-
-def _find_class(node, name):
+def find_class(node, name):
     for child in node.body:
         if isinstance(child, ast.ClassDef) and child.name == name:
             return child
-    raise AssertionError(f"class {name} not found")
+    raise AssertionError("class %s not found" % name)
 
-
-def _literal_assignments(node):
-    result = {}
+def assignments(node):
+    values = {}
     for child in node.body:
         if isinstance(child, ast.Assign) and len(child.targets) == 1:
             target = child.targets[0]
             if isinstance(target, ast.Name):
                 try:
-                    result[target.id] = ast.literal_eval(child.value)
-                except ValueError:
-                    continue
-    return result
+                    values[target.id] = ast.literal_eval(child.value)
+                except (ValueError, TypeError):
+                    pass
+    return values
 
-
-def _load_function(path, name):
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    function = next(
-        (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name),
-        None,
-    )
-    if function is None:
-        raise AssertionError(f"function {name} not found in {path}")
-    namespace = {"Path": Path}
-    ast.fix_missing_locations(function)
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
-    return namespace[name]
-
-
-class _LooseArgs(SimpleNamespace):
-    def __getattr__(self, _name):
-        return None
-
-
-class TestGo2TaskConfig(unittest.TestCase):
-    def test_new_tasks_are_registered(self):
+class TestGo2AmpTaskConfig(unittest.TestCase):
+    def test_single_task_registration_preserves_mgdp_references(self):
         source = (ROOT / "legged_gym/envs/__init__.py").read_text(encoding="utf-8")
-        self.assertIn('task_registry.register("go2_amp_stage1"', source)
-        self.assertIn('task_registry.register("go2_amp_stage2"', source)
-
-    def test_original_tasks_remain_registered(self):
-        source = (ROOT / "legged_gym/envs/__init__.py").read_text(encoding="utf-8")
+        self.assertEqual(source.count('task_registry.register("go2_amp"'), 1)
+        self.assertNotIn('task_registry.register("go2_amp_stage', source)
         self.assertIn('task_registry.register("random_dog_stage1"', source)
         self.assertIn('task_registry.register("random_dog_stage2"', source)
 
-    def test_stage1_config_is_task_priority_forward_locomotion(self):
-        path = ROOT / "legged_gym/envs/go2_amp/config.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        stage1 = _find_class(tree, "Go2AmpStage1Cfg")
+    def test_active_expert_manifest_is_forward_and_turn_only(self):
+        tree = ast.parse((ROOT / "legged_gym/envs/go2_amp/config.py").read_text(encoding="utf-8"))
+        top = assignments(tree)
+        self.assertEqual(top["AMP_EXPERT_GROUPS"], {
+            "forward": ["go2_forward.txt", "go2_forward_fast.txt"],
+            "turn": [
+                "go2_turn_left.txt", "go2_turn_left_fast.txt", "go2_turn_left_faster.txt",
+                "go2_turn_right.txt", "go2_turn_right_fast.txt", "go2_turn_right_faster.txt",
+            ],
+        })
+        self.assertEqual(top["AMP_EXPERT_GROUP_WEIGHTS"], {"forward": 0.8, "turn": 0.2})
 
-        rewards = _find_class(stage1, "rewards")
-        reward_values = _literal_assignments(rewards)
-        scales = _literal_assignments(_find_class(rewards, "scales"))
-        self.assertEqual(
-            {name: scales[name] for name in ("motion_trot", "motion_bound", "motion_pace")},
-            {"motion_trot": 0.0, "motion_bound": 0.0, "motion_pace": 0.0},
-        )
-        self.assertEqual(scales["feet_air_time"], 0.5)
-        self.assertEqual(reward_values["amp_air_time_cap"], 0.75)
-
-        terrain = _literal_assignments(_find_class(stage1, "terrain"))
-        commands_node = _find_class(stage1, "commands")
-        commands = _literal_assignments(commands_node)
-        command_ranges = _literal_assignments(_find_class(commands_node, "ranges"))
-        domain_rand = _literal_assignments(_find_class(stage1, "domain_rand"))
-        self.assertEqual(terrain["max_init_terrain_level"], 0)
-        self.assertIs(commands["curriculum"], False)
-        self.assertIs(commands["heading_command"], True)
-        self.assertIs(domain_rand["push_robots"], False)
-        self.assertEqual(command_ranges["lin_vel_x"], [0.0, 0.8])
-        self.assertEqual(command_ranges["lin_vel_y"], [0.0, 0.0])
-        self.assertEqual(command_ranges["heading"], [0.0, 0.0])
-        self.assertEqual(command_ranges["new_lin_vel_x"], [0.0, 0.8])
-        self.assertEqual(command_ranges["new_lin_vel_y"], [0.0, 0.0])
-        self.assertEqual(command_ranges["new_heading"], [0.0, 0.0])
-
-        train = _find_class(tree, "Go2AmpStage1TrainCfg")
-        runner = _literal_assignments(_find_class(train, "runner"))
-        expected = {
-            "experiment_name": "go2_amp_stage1_task_priority",
-            "num_steps_per_env": 24,
-            "amp_reward_coef": 0.01,
-            "amp_easy_gate": 1.0,
-            "amp_hard_gate": 1.0,
-            "amp_updates_per_iter": 1,
-            "amp_batch_size": 512,
-            "amp_replay_rollouts": 2,
-            "amp_learning_rate": 1e-4,
-            "amp_gradient_penalty_coef": 10.0,
-            "amp_discriminator_start_iteration": 100,
-            "amp_ramp_end_iteration": 499,
-            "amp_curriculum_unlock_iteration": 500,
-            "amp_anchor_fraction": 0.15,
-            "amp_stratified_replay": True,
-        }
-        self.assertEqual({name: runner[name] for name in expected}, expected)
-
-    def test_stage2_config_keeps_legacy_values(self):
-        path = ROOT / "legged_gym/envs/go2_amp/config.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        stage2 = _find_class(tree, "Go2AmpStage2Cfg")
-        scales = _literal_assignments(_find_class(_find_class(stage2, "rewards"), "scales"))
-        self.assertEqual(scales["feet_air_time"], 0.0)
-        runner = _literal_assignments(
-            _find_class(_find_class(tree, "Go2AmpStage2TrainCfg"), "runner")
-        )
-        self.assertEqual(runner["experiment_name"], "go2_amp_stage2")
-        self.assertEqual(runner["amp_hard_gate"], 0.25)
-
-    def test_amp_reward_coefficient_cli_overrides_only_runner(self):
-        path = ROOT / "legged_gym/utils/helpers.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        get_args = next(
-            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "get_args"
-        )
-        custom_parameters = next(
-            node.value
-            for node in get_args.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "custom_parameters"
-                    for target in node.targets)
-        )
-        amp_option = None
-        for item in custom_parameters.elts:
-            fields = {
-                key.value: value
-                for key, value in zip(item.keys, item.values)
-                if isinstance(key, ast.Constant)
-            }
-            if ast.literal_eval(fields["name"]) == "--amp_reward_coef":
-                amp_option = fields
-                break
-        self.assertIsNotNone(amp_option)
-        self.assertIsInstance(amp_option["type"], ast.Name)
-        self.assertEqual(amp_option["type"].id, "float")
-
-        update = _load_function(path, "update_cfg_from_args")
-        for coefficient in (0.0, 0.01, 0.0005):
-            runner = SimpleNamespace(amp_reward_coef=99.0, sentinel="unchanged")
-            train_cfg = SimpleNamespace(
-                seed=1, runner=runner, Encoder=SimpleNamespace(priv_info=False)
-            )
-            update(None, train_cfg, _LooseArgs(amp_reward_coef=coefficient))
-            self.assertEqual(runner.amp_reward_coef, coefficient)
-            self.assertEqual(runner.sentinel, "unchanged")
-
-    def test_stage1_output_name_is_deterministic_but_explicit_name_wins(self):
-        path = ROOT / "scripts/train_go2_amp_stage1.py"
-        resolver = _load_function(path, "resolve_stage1_output_name")
-        explicit = "outputs/custom/run-a"
-        self.assertEqual(
-            Path(resolver(explicit, 0.01, 7, "repo")),
-            Path("repo") / explicit,
-        )
-        absolute = (Path.cwd() / "outside" / "run-b").resolve()
-        self.assertEqual(Path(resolver(str(absolute), 0.01, 7, "repo")), absolute)
-        self.assertEqual(
-            Path(resolver("debug", 0.01, 1, "repo")).name,
-            "stage1_task_priority_amp0p01_seed1",
-        )
-        self.assertEqual(
-            Path(resolver("debug", 0.0, 1, "repo")).name,
-            "stage1_task_priority_amp0_seed1",
-        )
-        self.assertEqual(
-            Path(resolver(None, 0.0005, 3, "repo")).name,
-            "stage1_task_priority_amp0p0005_seed3",
-        )
-
+    def test_environment_and_training_baseline_matches_frozen_design(self):
+        tree = ast.parse((ROOT / "legged_gym/envs/go2_amp/config.py").read_text(encoding="utf-8"))
+        env_cfg = find_class(tree, "Go2AmpCfg")
+        train_cfg = find_class(tree, "Go2AmpTrainCfg")
+        env_values = assignments(find_class(env_cfg, "env"))
+        self.assertEqual(env_values["num_envs"], 4096)
+        self.assertEqual(env_values["num_privileged_obs"], 194)
+        self.assertEqual(assignments(find_class(env_cfg, "control")), {
+            "control_type": "P", "stiffness": {"joint": 30.0},
+            "damping": {"joint": 0.8}, "action_scale": 0.5, "decimation": 4,
+        })
+        camera = assignments(find_class(env_cfg, "camera"))
+        for key, value in {"resized": [16, 16], "update_interval": 5,
+                           "wm_sensor_steps": 1, "wm_rollout_steps": 4,
+                           "noise_gaussian": 0.03, "noise_dropout": 0.1}.items():
+            self.assertEqual(camera[key], value)
+        domain = assignments(find_class(env_cfg, "domain_rand"))
+        self.assertEqual(domain["friction_range"], [0.5, 1.25])
+        self.assertEqual(domain["latency_range"], [0.0, 0.02])
+        self.assertEqual(domain["push_interval_s"], 15)
+        self.assertEqual(domain["max_push_vel_xy"], 1.0)
+        scales = assignments(find_class(find_class(env_cfg, "rewards"), "scales"))
+        expected = {"tracking_lin_vel": 1.5, "tracking_ang_vel": 0.5,
+                    "feet_air_time": 0.5, "lin_vel_z": -1.0,
+                    "ang_vel_xy": -0.05, "orientation": -0.1,
+                    "torques": -1e-4, "dof_acc": -2.5e-7,
+                    "action_rate": -0.03, "collision": -1.0,
+                    "feet_stumble": -0.1, "dof_pos_limits": -10.0,
+                    "torque_limits": -0.01, "dof_error": -0.04,
+                    "feet_edge": -1.0, "cheat": -1.0, "stuck": -1.0,
+                    "termination": 0.0}
+        self.assertEqual({key: scales[key] for key in expected}, expected)
+        runner = assignments(find_class(train_cfg, "runner"))
+        self.assertEqual(runner["runner_class_name"], "Go2AmpPolicyRunner")
+        self.assertEqual(runner["num_steps_per_env"], 24)
+        self.assertEqual(runner["amp_updates_per_iter"], 20)
+        self.assertEqual(runner["amp_replay_rollouts"], 2)
+        self.assertEqual(runner["save_interval"], 1000)
+        self.assertEqual(assignments(find_class(train_cfg, "amp"))["reward_coef"], 0.01)
 
 if __name__ == "__main__":
     unittest.main()

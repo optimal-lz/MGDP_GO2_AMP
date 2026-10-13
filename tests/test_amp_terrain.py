@@ -173,7 +173,7 @@ class TestAmpTerrainConstruction(unittest.TestCase):
         config_source = (
             ROOT / "legged_gym/legged_gym/envs/go2_amp/config.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("num_cols = 6", config_source)
+        self.assertIn("num_cols = len(GO2_AMP_TERRAIN_COLUMNS)", config_source)
         self.assertIn("explicit_terrain_columns = GO2_AMP_TERRAIN_COLUMNS", config_source)
 
         env_path = ROOT / "legged_gym/legged_gym/envs/go2_amp/env.py"

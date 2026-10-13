@@ -18,10 +18,8 @@ task_registry.register("random_dog_stage1", Randomdog, RandomCfgStage1(), Random
 # Stage 2: align with paper setup (gap_parkour, rewards, etc.); can resume from stage1 WM/policy
 task_registry.register("random_dog_stage2", Randomdog, RandomCfgStage2(), RandomCfgPPOStage2())
 
-from .go2_amp.config import (Go2AmpStage1Cfg, Go2AmpStage1TrainCfg,
-                             Go2AmpStage2Cfg, Go2AmpStage2TrainCfg)
+from .go2_amp.config import Go2AmpCfg, Go2AmpTrainCfg
 from .go2_amp.env import Go2AmpRandomDog
 
-task_registry.register("go2_amp_stage1", Go2AmpRandomDog, Go2AmpStage1Cfg(), Go2AmpStage1TrainCfg())
-task_registry.register("go2_amp_stage2", Go2AmpRandomDog, Go2AmpStage2Cfg(), Go2AmpStage2TrainCfg())
+task_registry.register("go2_amp", Go2AmpRandomDog, Go2AmpCfg(), Go2AmpTrainCfg())
 
