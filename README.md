@@ -1,18 +1,28 @@
 # MGDP Go2 AMP
 
-This project preserves MGDP's Go2 control, perception, world model, PPO, terrain tasks and curriculum, and replaces the hand-crafted gait-pattern terms with a WMP-style adversarial motion prior. The task-priority redesign in this document applies only to the new Go2 AMP Stage 1 task. The original MGDP tasks and Go2 AMP Stage 2 keep their existing defaults.
+本项目是在 Legged Gym、RSL-RL/MGDP 现有框架上进行的进阶修改：保留 MGDP 的前下视深度感知、对比学习 World Model 和 PPO 运动控制架构，引入 WMP 风格的单判别器 AMP，把已有 Go2 专家动作作为自然步态先验。正式任务只有一个：`go2_amp`。
 
-## Method
+当前唯一有效的总体规格是 [`docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md`](docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md)。更早的 Stage、anchor、AMP ramp 等文档只保留为历史记录，不是正式训练协议。
 
-- The expert source is the copied Go2 trajectories in `datasets/go2_motion`. Task-priority Stage 1 uses only stance and the three forward clips, with group weights 0.25/0.75. Stage 2 retains its earlier expert groups and weights.
-- Each discriminator input joins two consecutive 30-value states: 12 joint positions, three body-frame linear velocities, three body-frame angular velocities, and 12 joint velocities. Transitions never cross motion clips. Terminal policy transitions use the state captured before Isaac Gym resets an environment.
-- The least-squares discriminator targets +1 for expert transitions and -1 for policy transitions, with an expert gradient penalty. Stage 1 uses the same terrain-independent AMP gate for every environment. Its effective coefficient is scheduled from zero to the selected target; Stage 2 retains its previous reward behavior.
-- Stage 1 sets `motion_trot`, `motion_bound`, and `motion_pace` to zero. It deliberately retains `feet_air_time=0.5`, with the per-foot raw term capped at 0.75 s, as a weak hand-written locomotion scaffold. Results must disclose this: the project does not claim that AMP replaces every locomotion-shaping term.
-- Stage 1 constructs exactly six original-MGDP simple terrain columns. There is no independent flat generator, flat column, or flat terrain class. Logical AMP anchors reuse column 0 at level 0 and are identified only by `is_amp_anchor`.
+## 正式设计摘要
 
-## Training host
+- Actor 只使用部署时可获得的带噪本体观测、命令、本体历史 token，以及由带噪深度产生并 `detach` 的 MGDP WM token。
+- Critic 使用 Actor 的 45D 基础本体观测，加真实基座线速度、足端高度和局部仿真高度采样；不重复接入 WM token。
+- AMP 与 Actor、Critic、WM 分支独立。单一判别器比较策略与专家的干净 30D 状态转移，只通过 AMP reward 影响 PPO return。
+- idle 命令精确为 `vx=0, yaw=0`，只使用 task、regularization 和 safety reward，也不写 AMP policy replay。其余均为 locomotion 命令并启用 AMP。
+- 专家库只启用前进和左右转向八个文件，前进/转向组权重为 80%/20%。站立、后退、横向及未启用动作仍保留在数据目录，但不进入判别器分布。
+- `feet_air_time` 作为弱运动支架保留；`dof_error`、`feet_edge`、`cheat`、`stuck` 作为必要控制/安全约束保留。手工 trot、bound、pace 和 stand-still 风格项关闭。
+- 单阶段从十类低难度地形联合训练，不设独立 WM 预训练、task-only 阶段、AMP 系数渐变、地形锚点或难度解锁。
+- 每轮顺序固定为：rollout 内 WM 在线更新 → rollout 后 4 次 WM 更新 → GAE → PPO → 20 次判别器更新。第 0 个 rollout 的 AMP contribution 为 0，从下一轮起使用固定系数。
+- AMP 和 noAMP 对照除 AMP 模块及奖励外完全一致。noAMP 不构造判别器、专家数据集或 AMP replay。
 
-Use a Linux machine with a supported NVIDIA GPU, CUDA, PyTorch and Isaac Gym installation. Start from MGDP's documented Python 3.8.20 / PyTorch 1.10.0+cu113 / CUDA 11.3 stack. Isaac Gym is a separate NVIDIA installation and is not redistributed here. From a compatible environment, install Isaac Gym from its own `python` directory, then run:
+正式十类地形为：`flat`、`rough_flat`、`smooth_slope`、`rough_slope`、`stairs`、`discrete_obstacles`、`hurdle`、`gap`、`pit`、`narrow_passage`。低矮钻越类地形不在范围内。平地与粗糙平地允许前进和转向，其他结构化地形只训练前进穿越。
+
+## 运行环境
+
+训练需要 Linux、NVIDIA GPU、CUDA、PyTorch、Isaac Gym 和 Warp。参考 MGDP 的 Python 3.8 / PyTorch 1.10 + CUDA 11.3 环境起步，并根据云服务器驱动验证具体组合。Isaac Gym 需从 NVIDIA 包的 `python` 目录单独安装，本仓库不分发它。
+
+在项目根目录安装：
 
 ```bash
 pip install -r legged_gym/requirement-gpu.txt
@@ -21,59 +31,198 @@ pip install -e ./warp_sensor
 export PYTHONPATH="$PWD/legged_gym:$PYTHONPATH"
 ```
 
-Confirm the specific CUDA driver, Warp, Isaac Gym and PyTorch combination on the rented host before a long run.
-
-Run the full CPU/PyTorch suite before simulation:
+先运行测试：
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-## Task-priority Stage 1 experiment protocol
+Windows 当前工作区没有安装 PyTorch、Isaac Gym 和匹配的 CUDA 栈，因此这里只能完成纯 Python、静态与源码编译验证；GPU 训练和 Viewer 验证必须在 RTX 4090 云服务器上执行。
 
-Launch the two primary runs from zero with the same seed and separate output directories:
+## 统一训练入口
 
-```bash
-python legged_gym/scripts/train_go2_amp_stage1.py --headless --num_envs 4096 --seed 1 --amp_reward_coef 0 --output_name outputs/go2_amp/stage1_task_priority_scaffold_seed1
-python legged_gym/scripts/train_go2_amp_stage1.py --headless --num_envs 4096 --seed 1 --amp_reward_coef 0.01 --output_name outputs/go2_amp/stage1_task_priority_amp0p01_seed1
+正式入口只有：
+
+```text
+legged_gym/scripts/train_go2_amp.py
 ```
 
-Use `--max_iterations 20` on the initial launch for the save/restore smoke. Resume only the same run, with the same coefficient and output directory. For example, the AMP run continues from its own checkpoint with:
+`--mode` 与 `--target_iteration` 必填；默认 `seed=1`、`num_envs=4096`，AMP 默认系数为 `0.01`。`target_iteration` 是绝对目标迭代数，不是“再训练多少轮”，续训时无需人工做减法。
+
+### 64 环境配对集成短跑
+
+先分别确认 AMP/noAMP 能启动、训练、保存严格配对 checkpoint：
 
 ```bash
-python legged_gym/scripts/train_go2_amp_stage1.py --headless --num_envs 4096 --seed 1 --amp_reward_coef 0.01 --output_name outputs/go2_amp/stage1_task_priority_amp0p01_seed1 --resume --resume_name outputs/go2_amp/stage1_task_priority_amp0p01_seed1 --checkpoint_model last.pt --max_iterations 80
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 64 --target_iteration 10 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 64 --target_iteration 10 --headless
 ```
 
-`--max_iterations` is the number of additional iterations after resume. Therefore the exact cumulative checkpoints are reached with 20 iterations from zero, followed by same-run increments of 80, 100, 50, 250, 500, and 9000 to reach 100, 200, 250, 500, 1000, and 10000. Stop after each target for human review; do not queue the whole sequence blindly.
+对应目录是：
 
-The first comparison is Scaffold-only (`0`) against the primary AMP pressure test (`0.01`). The lower coefficient is not part of that pair. Only if a researcher decides after reviewing the `0.01` run that a lower-pressure experiment is warranted, launch this independent fallback from zero:
+```text
+legged_gym/outputs/go2_amp/amp_coef0p01_seed1_env64/
+legged_gym/outputs/go2_amp/no_amp_seed1_env64/
+```
+
+再分别从刚保存的 manifest 续训到绝对目标 20，验证优化器、WM、AMP 与 RNG 状态均能恢复：
 
 ```bash
-python legged_gym/scripts/train_go2_amp_stage1.py --headless --num_envs 4096 --seed 1 --amp_reward_coef 0.0005 --output_name outputs/go2_amp/stage1_task_priority_amp0p0005_seed1
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 64 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1_env64 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 64 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1_env64 --headless
 ```
 
-Never resume one coefficient from another coefficient's checkpoint, and do not use an old-architecture checkpoint for formal task-priority training. A full same-run resume requires the matching `stage1_nn/last.pt` policy/optimizer/AMP checkpoint and `stage1_nn/wm_last.pt` world-model checkpoint. The loader rejects missing or incompatible AMP metadata before partially restoring state. `--amp_policy_only` remains an explicit policy warm-start facility, not a valid way to resume a formal run in this protocol.
+64 环境只验证集成，不代表 4090 上的正式吞吐、显存占用或控制效果。
 
-The zero-based Stage 1 schedule is fixed:
+### 4096 环境 AMP 全负载短跑
 
-- Iterations 0–99: level-0 task-only warmup; AMP effective coefficient is zero and the discriminator does not update, while both replay pools continue recording.
-- Iteration 100: discriminator updates start after the rollout; that rollout still receives zero AMP reward.
-- Iterations 101–498: the coefficient ramps linearly as `target * (iteration - 100) / 399`.
-- Iteration 499 onward: the full selected target is active.
-- Iteration 500 onward: non-anchor course environments may change level on later resets; anchors stay at column 0, level 0.
+正式 AMP 目录从 10 iterations 起步：
 
-For target `0.01`, the effective values are approximately 0.00251 at iteration 200, 0.00376 at 250, 0.00501 at 300, 0.00752 at 400, and exactly 0.01 from 499 onward. The 20-iteration smoke therefore proves integration only; it says nothing about AMP style or terrain performance.
+```bash
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 10 --headless
+```
 
-At 20 iterations verify finite values and the paired save/resume path. At 100 preserve the task-only warmup checkpoint. Review the paired 4096-environment runs at 200 and 250, the full-0.01/curriculum boundary at 500, and the early multi-terrain screen at 1000. Only after an explicit human admission decision should a run be extended to at least 10000 iterations.
+检查无 OOM、NaN/Inf，WM/PPO/D 指标均产生，且 `checkpoints/` 内生成完整 policy/WM/manifest 三件套。这里不预先增加显存保护分支；若 RTX 4090 24 GB 实测不足，再基于数据调整。
 
-Every comparison uses a fixed 0.7 m/s forward command, identical terrain seed, camera, and rollout length. Review task progress/tracking/falls, AMP and discriminator distributions, anchor/course diagnostics, `feet_air_time`, and fixed videos together. The stop gates and Stage 1 admission criteria are a researcher checklist, not training-loop control flow: the program only logs diagnostics and saves checkpoints. It never stops or continues a run, switches to `0.0005`, creates another experiment, or enters Stage 2 based on metric values. The researcher reviews the evidence with the collaborator before choosing the next command.
+随后在同一正式目录续训到绝对目标 20，检查 TensorBoard step 单调，以及 checkpoint、RNG 和地形等级连续：
 
-Stage 2 is outside this experiment protocol and is not automatically launched. Its existing manual launcher, configuration, checkpoint behavior, and defaults remain unchanged.
+```bash
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
+```
 
-For evaluation, compare original MGDP and MGDP Go2 AMP under identical seeds and terrain distributions. Record tracking error, falls, distance/progress, obstacle success, energy, reward components and performance by terrain class. A short smoke rollout checks integration only; it does not establish multi-terrain performance.
+### 正式 AMP/noAMP 对照
 
-## Verification status on this Windows workspace
+AMP 的 4096 环境短跑已经建立正式目录，因此继续续训到 1000：
 
-Python 3.11 and NumPy are available locally; PyTorch, Isaac Gym, Warp runtime validation, and the matching CUDA training stack are not installed. Pure/source CPU checks run here, while PyTorch-dependent tests skip. The training host must still pass the complete PyTorch suite and perform Stage 1 config startup, the 20-iteration paired save/resume smoke, the 100-iteration task-only checkpoint, paired 4096×200/250 diagnosis, the 4096×500 full-0.01 check, and the 4096×1000 early screen. Each continue/stop choice is manual. No control-performance claim is made from the Windows checks or GPU smoke alone.
+```bash
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 1000 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
+```
 
-See `SOURCES.md` for provenance and `docs/superpowers/specs/2026-10-09-mgdp-go2-amp-training-redesign.md` for the confirmed task-priority design.
+noAMP 从零开始训练到同一绝对目标：
+
+```bash
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 1000 --headless
+```
+
+审阅 1000 轮结果后，分别续训到 2000：
+
+```bash
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 2000 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 2000 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1 --headless
+```
+
+通过中期检查后续训到 5000：
+
+```bash
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1 --headless
+```
+
+若要新建不同 AMP 系数实验，可在首次启动时传入例如 `--amp_reward_coef 0.005`，将得到独立目录 `amp_coef0p005_seed1`。续训必须保持 mode、系数、seed、环境数与完整配置一致；noAMP 不接受 AMP 系数参数。
+
+## 实验目录与严格续训
+
+每个实验目录结构为：
+
+```text
+legged_gym/outputs/go2_amp/<run_name>/
+├── config.json
+├── run.json
+├── checkpoints/
+│   ├── policy_amp_1000.pt        # noAMP 时为 policy_no_amp_1000.pt
+│   ├── wm_1000.pt
+│   ├── checkpoint_1000.json
+│   └── last.json
+├── tensorboard/
+└── eval/
+    ├── wm/
+    ├── comparison/
+    └── videos/
+```
+
+`checkpoint_1000.json` 记录 mode、AMP 系数、seed、环境数、配置哈希，以及 policy/WM 文件各自的 SHA-256。`last.json` 只包含最新 manifest 指针。加载时会在改变模型前验证兼容性、文件存在性、哈希与迭代号，禁止 policy-only 或错配 WM 的正式续训。
+
+policy checkpoint 包含 PPO 网络与优化器、地形等级、Python/NumPy/Torch CPU/CUDA RNG，以及 AMP 模式下的判别器、优化器、normalizer、replay 和采样 RNG。WM checkpoint 独立保存网络、优化器与统计量，便于解释性分析，但只能与同 manifest 的 policy 配对。
+
+## TensorBoard
+
+```bash
+tensorboard --logdir legged_gym/outputs/go2_amp
+```
+
+每轮只记录精简核心曲线：task reward、AMP contribution、total reward、PPO 更新指标以及采样/学习耗时；每 10 轮补充 terrain mean level 与 action std。AMP 模式记录判别器指标，noAMP 不产生判别器训练曲线且 AMP contribution 必须恒为 0。TensorBoard 用于诊断，不改变训练流程。
+
+## Isaac Gym Viewer 与 WM 可解释性
+
+Viewer 严格加载一对 policy/WM checkpoint，关闭课程、随机化和训练更新，并允许指定单一地形、等级与命令。平地转向示例：
+
+```bash
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain flat --level 5 --vx 0.4 --yaw 0.6 --follow_camera
+```
+
+楼梯前进示例：
+
+```bash
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain stairs --level 9 --vx 0.5 --yaw 0 --follow_camera
+```
+
+结构化地形要求 `yaw=0`。省略 `--manifest` 时使用 `last.json`。Viewer 会显示机器人运动，并在 episode 结束时输出命令、实际速度、AMP reward 和失败原因。
+
+WM 对比图写入：
+
+```text
+eval/wm/checkpoint_1000/<terrain>_level_<level>/depth_latest.png
+eval/wm/checkpoint_1000/<terrain>_level_<level>/height_latest.png
+```
+
+需要保留时间序列图片时添加 `--numbered_snapshots --snapshot_interval 100`；默认只覆盖 `depth_latest.png` 与 `height_latest.png`，避免产生大量冗余文件。
+
+视频录制是可选工具，不是默认验收步骤。安装 FFmpeg 且使用 Isaac Gym Viewer 时可自行决定录制：
+
+```bash
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --terrain stairs --level 9 --vx 0.5 --yaw 0 --record --duration 20 --fps 30 --record_output stairs_level9.mp4
+```
+
+视频只允许写入所选 run 的 `eval/videos/` 下。
+
+已有专家兼容性证据 `D:\New Beginning Help\算力自由使用\Video_260929142335.mp4` 已包含当前正式启用的前进和左右转向动作在本项目 Go2 URDF 上的回放，因此不重复做专家库离线回放验收。该视频是本机外部证据，不属于仓库产物。
+
+## AMP/noAMP 固定对照评估
+
+在相同迭代、seed 和配置下执行：
+
+```bash
+python legged_gym/scripts/evaluate_go2_amp_comparison.py \
+  --amp_manifest legged_gym/outputs/go2_amp/amp_coef0p01_seed1/checkpoints/checkpoint_1000.json \
+  --no_amp_manifest legged_gym/outputs/go2_amp/no_amp_seed1/checkpoints/checkpoint_1000.json \
+  --episodes_per_case 20
+```
+
+评估固定覆盖 72 个 case：十类地形的前进命令，以及 `flat`/`rough_flat` 的转向命令；两个策略使用相同 case、episode seed 和冻结环境。noAMP 策略也使用 AMP run 的同一个冻结判别器与 normalizer 离线打分，使 style score 可直接比较，评估过程不更新任何网络或 replay。
+
+默认只生成以下文件，不生成 Markdown 报告：
+
+```text
+eval/comparison/cases.csv
+eval/comparison/summary.csv
+eval/comparison/completion.png
+eval/comparison/tracking.png
+eval/comparison/smoothness.png
+eval/comparison/style_score.png
+```
+
+CSV 保留逐 case 数据与汇总，PNG 用于快速对照完成率、速度追踪、平滑/力矩和 AMP style score。后续根据这些结果与 TensorBoard 曲线共同分析，再决定是否改系数或训练设置。
+
+## 验收边界
+
+本地测试和 64 环境短跑只证明代码集成；4096×10 只证明单卡全负载能够运行。运动控制任务的最终判断必须基于 1000/2000/5000 迭代的配对实验、十类地形 Viewer 观察、WM 图和固定对照 CSV/PNG，不能用某一次短跑或单个 reward 曲线代替。
+
+云服务器首次执行时依次确认：
+
+1. 64 环境 AMP/noAMP 均能保存、严格加载并继续训练。
+2. 4096 环境 AMP 运行 10 轮无 OOM、NaN/Inf，policy/WM/D 与 TensorBoard 指标正常。
+3. 用同一正式目录续训，checkpoint 迭代单调且 `last.json` 正确指向最新 manifest。
+4. Viewer 在 flat、stairs 及其他代表地形上冻结运行，WM 图片持续更新。
+5. AMP/noAMP 同迭代对照输出两份 CSV 和四张 PNG，并由人工结合运动效果审阅。
+
+参见 [`SOURCES.md`](SOURCES.md) 了解参考项目与数据来源。
