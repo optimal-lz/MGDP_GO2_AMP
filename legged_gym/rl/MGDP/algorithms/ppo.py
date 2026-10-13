@@ -51,6 +51,7 @@ class PPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
+        self.last_update_metrics = {}
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape,
                      Hist_info_shape, image_info_shape):
@@ -216,6 +217,14 @@ class PPO:
         mean_cnn_loss  /= num_updates
 
         self.storage.clear()
+
+        self.last_update_metrics = {
+            "ppo/value_loss": mean_value_loss,
+            "ppo/surrogate_loss": mean_surrogate_loss,
+            "ppo/velocity_loss": mean_vel_loss,
+            "ppo/feet_loss": mean_feet_loss,
+            "ppo/learning_rate": self.learning_rate,
+        }
 
         return mean_value_loss, mean_surrogate_loss, mean_vel_loss, mean_feet_loss, mean_cnn_loss
 

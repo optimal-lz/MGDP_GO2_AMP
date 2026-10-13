@@ -6,7 +6,7 @@ import numpy as np
 from rl.env import VecEnv
 
 
-from rl.MGDP.runners import MGDPPolicyRunner
+from rl.MGDP.runners import Go2AmpPolicyRunner, MGDPPolicyRunner
 
 
 
@@ -189,7 +189,19 @@ class TaskRegistry():
 
         train_cfg_dict = class_to_dict(train_cfg)
 
-        runner = eval(args.algo + "PolicyRunner")(env, train_cfg_dict, log_dir, device=args.rl_device)
+        runner_classes = {
+            "MGDPPolicyRunner": MGDPPolicyRunner,
+            "Go2AmpPolicyRunner": Go2AmpPolicyRunner,
+        }
+        runner_class_name = train_cfg_dict["runner"].get(
+            "runner_class_name", "MGDPPolicyRunner")
+        try:
+            runner_class = runner_classes[runner_class_name]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unknown runner_class_name: {runner_class_name}") from exc
+        runner = runner_class(
+            env, train_cfg_dict, log_dir, device=args.rl_device)
 
         print("**************** RUNNER ****************", runner)
 
