@@ -5,7 +5,7 @@ from torch import nn
 
 
 class AMPDiscriminator(nn.Module):
-    def __init__(self, input_dim=60, hidden_dims=(256, 128)):
+    def __init__(self, input_dim=60, hidden_dims=(1024, 512)):
         super().__init__()
         layers = []
         width = input_dim
@@ -23,4 +23,4 @@ class AMPDiscriminator(nn.Module):
             inputs = expert_pair.detach().requires_grad_(True)
             logits = self(inputs)
             gradient = torch.autograd.grad(logits.sum(), inputs, create_graph=True)[0]
-            return coefficient * (gradient.norm(dim=-1) - 1).square().mean()
+            return coefficient * gradient.square().sum(dim=-1).mean()

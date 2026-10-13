@@ -44,21 +44,21 @@ class TestAmpRolloutIntegration(unittest.TestCase):
             node for node in tree.body
             if isinstance(node, ast.ClassDef) and node.name == "AMPSession"
         )
-        distribution_sums = next(
+        reward = next(
             node for node in session.body
-            if isinstance(node, ast.FunctionDef) and node.name == "_distribution_sums"
+            if isinstance(node, ast.FunctionDef) and node.name == "reward"
         )
-        self.assertNotIn(".item()", ast.unparse(distribution_sums))
+        reward_source = ast.unparse(reward)
+        self.assertNotIn(".item()", reward_source)
+        self.assertIn("self.last_reward_metrics", reward_source)
         record = next(
             node for node in session.body
             if isinstance(node, ast.FunctionDef) and node.name == "record"
         )
         record_source = ast.unparse(record)
-        self.assertNotIn("mask.any()", record_source)
-        self.assertIn(
-            "if self.anchor_replay is None or self.course_replay is None",
-            record_source,
-        )
+        self.assertIn("self.replay.insert(state[mask], next_state[mask])", record_source)
+        self.assertNotIn("anchor", record_source)
+        self.assertNotIn("course", record_source)
 
     def test_rollout_metrics_aggregate_every_step_and_keep_groups_distinct(self):
         new_accumulator, accumulate, finalize = _load_runner_helpers(

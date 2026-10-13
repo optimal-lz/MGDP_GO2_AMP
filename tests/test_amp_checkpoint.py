@@ -1,275 +1,176 @@
-import importlib.util
 import ast
+import importlib.util
+from pathlib import Path
 import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "legged_gym"))
-HAS_TORCH = importlib.util.find_spec("torch") is not None
+import numpy as np
+
+
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "legged_gym"))
+HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
-class TestAmpCheckpointSource(unittest.TestCase):
-    def test_warmup_update_metrics_keep_group_skip_tags_visible(self):
+class TestSingleAmpSource(unittest.TestCase):
+    def test_discriminator_contract_and_zero_target_gradient_penalty(self):
+        path = ROOT / "legged_gym/rl/MGDP/amp/discriminator.py"
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        discriminator = next(node for node in tree.body
+                             if isinstance(node, ast.ClassDef)
+                             and node.name == "AMPDiscriminator")
+        methods = {node.name: ast.unparse(node) for node in discriminator.body
+                   if isinstance(node, ast.FunctionDef)}
+        self.assertIn("hidden_dims=(1024, 512)", methods["__init__"])
+        self.assertIn("nn.ReLU()", methods["__init__"])
+        self.assertIn("gradient.square()", methods["gradient_penalty"])
+        self.assertNotIn("- 1", methods["gradient_penalty"])
+
+    def test_session_has_only_formal_single_discriminator_api(self):
         path = ROOT / "legged_gym/rl/MGDP/amp/session.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        session = next(
-            node for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "AMPSession"
-        )
-        update = next(
-            node for node in session.body
-            if isinstance(node, ast.FunctionDef) and node.name == "update"
-        )
-        schedule_gate = next(
-            node for node in ast.walk(update)
-            if isinstance(node, ast.If)
-            and "discriminator_updates_enabled" in ast.unparse(node.test)
-        )
-        emitted_strings = {
-            node.value for node in ast.walk(ast.Module(body=schedule_gate.body, type_ignores=[]))
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        }
-        self.assertTrue({
-            "anchor_skipped_updates",
-            "course_skipped_updates",
-            "anchor_replay_empty",
-            "course_replay_empty",
-        }.issubset(emitted_strings))
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        session = next(node for node in tree.body
+                       if isinstance(node, ast.ClassDef) and node.name == "AMPSession")
+        methods = {node.name: ast.unparse(node) for node in session.body
+                   if isinstance(node, ast.FunctionDef)}
+        self.assertIn("amp_seed", methods["__init__"])
+        self.assertIn("eligible", methods["reward"])
+        self.assertIn("enabled", methods["reward"])
+        self.assertIn("self.config['amp_reward_coef'] * raw", methods["reward"])
+        self.assertIn("self.replay.insert(state[mask], next_state[mask])", methods["record"])
+        self.assertIn("amp_updates_per_iter", methods["update"])
+        for obsolete in ("stage", "anchor", "course", "stratified", "ramp", "policy_only"):
+            self.assertNotIn(obsolete, source.lower())
 
-    def test_compatibility_is_checked_before_nested_state_loads(self):
-        path = ROOT / "legged_gym/rl/MGDP/amp/session.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        session = next(
-            node for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "AMPSession"
-        )
-        methods = {
-            node.name: ast.unparse(node)
-            for node in session.body
-            if isinstance(node, ast.FunctionDef)
-        }
-        self.assertIn("_compatibility", methods)
-        load = methods["load_state_dict"]
-        compatibility_check = load.index("compatibility")
-        discriminator_load = load.index("self.discriminator.load_state_dict")
-        optimizer_load = load.index("self.optimizer.load_state_dict")
-        replay_load = load.index("self._restore_replay")
-        self.assertLess(compatibility_check, discriminator_load)
-        self.assertLess(compatibility_check, optimizer_load)
-        self.assertLess(compatibility_check, replay_load)
-        for field in (
-            "amp_reward_coef",
-            "amp_discriminator_start_iteration",
-            "amp_ramp_end_iteration",
-            "amp_curriculum_unlock_iteration",
-            "amp_anchor_fraction",
-            "amp_updates_per_iter",
-            "amp_batch_size",
-            "amp_learning_rate",
-            "amp_replay_rollouts",
-            "amp_gradient_penalty_coef",
-            "amp_groups",
-            "amp_group_weights",
-            "amp_num_envs",
-        ):
-            self.assertIn(field, methods["_compatibility"])
-
-        runner_path = ROOT / "legged_gym/rl/MGDP/runners/policy_runner.py"
-        runner_source = runner_path.read_text(encoding="utf-8")
-        config_assignment = runner_source.index(
-            'self.cfg["amp_num_envs"] = int(self.env.num_envs)'
-        )
-        session_creation = runner_source.index("self.amp = AMPSession(")
-        self.assertLess(config_assignment, session_creation)
+    def test_capacity_and_complete_state_are_explicit(self):
+        source = (ROOT / "legged_gym/rl/MGDP/amp/session.py").read_text(encoding="utf-8")
+        self.assertIn("2 * num_envs * num_steps", source)
+        for field in ("discriminator", "optimizer", "normalizer", "replay",
+                      "update_count", "compatibility", "amp_seed", "dataset_rng_state"):
+            self.assertIn(f'"{field}"', source)
 
 
 @unittest.skipUnless(HAS_TORCH, "PyTorch is tested on the training host")
-class TestAmpCheckpoint(unittest.TestCase):
+class TestSingleAmpTensor(unittest.TestCase):
     @staticmethod
     def _config(**overrides):
         config = {
             "amp_reward_coef": 0.01,
-            "amp_batch_size": 512,
-            "amp_replay_rollouts": 2,
-            "num_steps_per_env": 24,
-            "amp_updates_per_iter": 1,
+            "amp_batch_size": 8,
+            "amp_updates_per_iter": 20,
             "amp_gradient_penalty_coef": 10.0,
-            "amp_stratified_replay": True,
-            "amp_discriminator_start_iteration": 100,
-            "amp_ramp_end_iteration": 499,
-            "amp_curriculum_unlock_iteration": 500,
-            "amp_anchor_fraction": 0.15,
             "amp_learning_rate": 1e-4,
-            "amp_groups": {"stance": ["go2_stance.txt"], "forward": ["go2_forward.txt"]},
-            "amp_group_weights": {"stance": 0.25, "forward": 0.75},
-            "amp_num_envs": 4,
+            "amp_replay_rollouts": 2,
+            "num_envs": 4,
+            "num_steps_per_env": 3,
+            "amp_groups": {"forward": ["forward.txt"], "turn": ["turn.txt"]},
+            "amp_group_weights": {"forward": 0.8, "turn": 0.2},
         }
         config.update(overrides)
         return config
 
-    def test_missing_state_and_policy_warm_start(self):
-        from rl.MGDP.amp.session import restore_amp_checkpoint
-        class Stub:
-            loaded = False
-            def load_state_dict(self, state):
-                self.loaded = True
-        session = Stub()
-        with self.assertRaisesRegex(ValueError, "AMP checkpoint"):
-            restore_amp_checkpoint(session, {}, False)
-        restore_amp_checkpoint(session, {}, True)
-        self.assertFalse(session.loaded)
-        restore_amp_checkpoint(session, {"amp_state": {}}, False)
-        self.assertTrue(session.loaded)
+    class Dataset:
+        def __init__(self, seed=91):
+            self.rng = np.random.default_rng(seed)
 
-    def test_session_update_and_round_trip(self):
+        def sample(self, count, device):
+            import torch
+            first = self.rng.normal(size=(count, 30)).astype(np.float32)
+            second = self.rng.normal(size=(count, 30)).astype(np.float32)
+            return (torch.as_tensor(first, device=device),
+                    torch.as_tensor(second, device=device))
+
+    def test_construction_preserves_global_numpy_and_torch_rng(self):
         import torch
         from rl.MGDP.amp.session import AMPSession
-        class Dataset:
-            def sample(self, count, device):
-                return torch.randn(count, 30, device=device) + 2, torch.randn(count, 30, device=device) + 2
-        config = self._config(amp_batch_size=16)
-        session = AMPSession(Dataset(), 1, "cpu", config)
-        is_anchor = torch.tensor([True] * 10 + [False] * 10)
-        session.record(torch.randn(20, 30), torch.randn(20, 30), is_anchor)
-        before = next(session.discriminator.parameters()).detach().clone()
-        metrics = session.update(iteration=100)
-        after = next(session.discriminator.parameters()).detach().clone()
-        self.assertFalse(torch.equal(before, after))
-        self.assertTrue(torch.isfinite(torch.tensor(metrics["discriminator_loss"])))
-        restored = AMPSession(Dataset(), 1, "cpu", config)
-        restored.load_state_dict(session.state_dict())
-        self.assertEqual(restored.iteration, 1)
-        self.assertTrue(torch.equal(next(restored.discriminator.parameters()), after))
-        with self.assertRaisesRegex(ValueError, "amp_batch_size"):
-            AMPSession(Dataset(), 1, "cpu", dict(config, amp_batch_size=0))
+        np.random.seed(17)
+        torch.manual_seed(19)
+        numpy_before = np.random.get_state()
+        torch_before = torch.random.get_rng_state().clone()
 
-    def test_replay_round_trip_validates_before_mutation(self):
-        import torch
-        from rl.MGDP.amp.replay import AMPReplayBuffer
+        AMPSession(self.Dataset(), "cpu", self._config(), amp_seed=23)
 
-        replay = AMPReplayBuffer(4, 30, "cpu")
-        replay.insert(torch.arange(180, dtype=torch.float).reshape(6, 30),
-                      torch.arange(180, 360, dtype=torch.float).reshape(6, 30))
-        state = replay.state_dict()
-        restored = AMPReplayBuffer(4, 30, "cpu")
-        restored.load_state_dict(state)
-        self.assertEqual(restored.cursor, replay.cursor)
-        self.assertEqual(restored.size, replay.size)
-        self.assertTrue(torch.equal(restored.states, replay.states))
-        self.assertTrue(torch.equal(restored.next_states, replay.next_states))
+        numpy_after = np.random.get_state()
+        self.assertTrue(all(np.array_equal(a, b) if isinstance(a, np.ndarray) else a == b
+                            for a, b in zip(numpy_before, numpy_after)))
+        self.assertTrue(torch.equal(torch_before, torch.random.get_rng_state()))
 
-        before = restored.states.clone()
-        incompatible = dict(state, capacity=5)
-        with self.assertRaisesRegex(ValueError, "capacity"):
-            restored.load_state_dict(incompatible)
-        self.assertTrue(torch.equal(restored.states, before))
-
-    def test_stratified_sampling_is_one_to_one_and_empty_pool_skips(self):
+    def test_reward_is_exactly_masked_contribution_and_never_updates_stats(self):
         import torch
         from rl.MGDP.amp.session import AMPSession
+        session = AMPSession(self.Dataset(), "cpu", self._config(), amp_seed=3)
 
-        class Dataset:
-            def sample(self, count, device):
-                return torch.randn(count, 30, device=device), torch.randn(count, 30, device=device)
+        class Fixed(torch.nn.Module):
+            def forward(self, pair):
+                return torch.tensor([1.0, 3.0], device=pair.device)[:pair.shape[0]]
 
-        session = AMPSession(Dataset(), 1, "cpu", self._config())
-        state = torch.cat((torch.zeros(2, 30), torch.full((2, 30), 10.0)))
-        mask = torch.tensor([True, True, False, False])
-        session.record(state, state + 1, mask)
-        policy_state, _ = session._sample_policy_batch()
-        self.assertEqual(int((policy_state[:, 0] < 5).sum()), 256)
-        self.assertEqual(int((policy_state[:, 0] > 5).sum()), 256)
-        self.assertEqual(session.anchor_replay.size, 2)
-        self.assertEqual(session.course_replay.size, 2)
+        session.discriminator = Fixed()
+        state = torch.zeros(2, 30)
+        eligible = torch.tensor([True, True])
+        count_before = session.normalizer.count
+        enabled = session.reward(state, state, eligible, enabled=True)
+        disabled = session.reward(state, state, eligible, enabled=False)
+        self.assertTrue(torch.allclose(enabled, torch.tensor([0.01, 0.0])))
+        self.assertTrue(torch.equal(disabled, torch.zeros(2)))
+        idle_masked = session.reward(
+            state, state, torch.tensor([True, False]), enabled=True)
+        self.assertEqual(idle_masked[1].item(), 0.0)
+        self.assertEqual(session.normalizer.count, count_before)
 
-        empty = AMPSession(Dataset(), 1, "cpu", self._config())
-        empty.record(torch.zeros(2, 30), torch.ones(2, 30), torch.ones(2, dtype=torch.bool))
-        metrics = empty.update(iteration=100)
-        self.assertEqual(metrics["amp_updates"], 0)
-        self.assertEqual(metrics["course_replay_empty"], 1)
-        self.assertEqual(metrics["course_skipped_updates"], 1)
-
-    def test_fixed_update_count_and_gradient_penalty_coefficient(self):
+    def test_single_replay_capacity_update_objective_and_gp(self):
         import torch
         from rl.MGDP.amp.session import AMPSession
-
-        class Dataset:
-            def sample(self, count, device):
-                return torch.randn(count, 30, device=device), torch.randn(count, 30, device=device)
-
-        config = self._config(
-            amp_batch_size=8,
-            amp_updates_per_iter=2,
-            amp_gradient_penalty_coef=7.0,
-        )
-        session = AMPSession(Dataset(), 1, "cpu", config)
-        mask = torch.tensor([True, True, False, False])
-        session.record(torch.randn(4, 30), torch.randn(4, 30), mask)
+        session = AMPSession(self.Dataset(), "cpu", self._config(), amp_seed=5)
+        self.assertEqual(session.replay.capacity, 24)
+        state = torch.randn(12, 30)
+        mask = torch.tensor([True, False] * 6)
+        session.record(state, state + 0.1, mask)
+        self.assertEqual(session.replay.size, 6)
+        count_before = session.normalizer.count
         coefficients = []
         original = session.discriminator.gradient_penalty
 
-        def recording_penalty(pair, coefficient):
+        def record_gp(pair, coefficient):
             coefficients.append(coefficient)
             return original(pair, coefficient)
 
-        session.discriminator.gradient_penalty = recording_penalty
-        before = next(session.discriminator.parameters()).detach().clone()
-        metrics = session.update(iteration=100)
-        after = next(session.discriminator.parameters()).detach().clone()
-        self.assertFalse(torch.equal(before, after))
-        self.assertEqual(metrics["amp_updates"], 2)
-        self.assertEqual(session.iteration, 2)
-        self.assertEqual(coefficients, [7.0, 7.0])
+        session.discriminator.gradient_penalty = record_gp
+        metrics = session.update()
+        self.assertEqual(session.update_count, 20)
+        self.assertEqual(metrics["amp_updates"], 20)
+        self.assertEqual(coefficients, [10.0] * 20)
+        self.assertGreater(session.normalizer.count, count_before)
+        self.assertTrue(torch.isfinite(torch.tensor(metrics["discriminator_loss"])))
 
-        for invalid in (0, -1):
-            with self.assertRaisesRegex(ValueError, "amp_updates_per_iter"):
-                AMPSession(Dataset(), 1, "cpu", self._config(amp_updates_per_iter=invalid))
-
-    def test_incompatible_checkpoint_is_rejected_before_partial_load(self):
+    def test_complete_round_trip_restores_rng_and_rejects_before_mutation(self):
         import torch
         from rl.MGDP.amp.session import AMPSession
-
-        class Dataset:
-            def sample(self, count, device):
-                return torch.randn(count, 30, device=device), torch.randn(count, 30, device=device)
-
-        mask = torch.tensor([True, True, False, False])
-        source = AMPSession(Dataset(), 1, "cpu", self._config(amp_batch_size=8))
-        source.record(torch.randn(4, 30), torch.randn(4, 30), mask)
-        source.update(iteration=100)
+        source = AMPSession(self.Dataset(), "cpu", self._config(), amp_seed=7)
+        source.record(torch.randn(10, 30), torch.randn(10, 30), torch.ones(10, dtype=torch.bool))
+        source.update()
         checkpoint = source.state_dict()
 
-        mismatches = {
-            "amp_reward_coef": 0.0005,
-            "amp_discriminator_start_iteration": 101,
-            "amp_ramp_end_iteration": 500,
-            "amp_curriculum_unlock_iteration": 501,
-            "amp_anchor_fraction": 0.2,
-            "amp_updates_per_iter": 2,
-            "amp_batch_size": 10,
-            "amp_learning_rate": 2e-4,
-            "amp_replay_rollouts": 3,
-            "amp_gradient_penalty_coef": 7.0,
-            "amp_groups": {"stance": ["go2_stance.txt"]},
-            "amp_group_weights": {"stance": 1.0},
-            "amp_num_envs": 8,
-        }
-        for field, different in mismatches.items():
-            config = self._config(amp_batch_size=8)
-            config[field] = different
-            target = AMPSession(Dataset(), 1, "cpu", config)
-            target.record(torch.randn(4, 30), torch.randn(4, 30), mask)
-            parameter_before = next(target.discriminator.parameters()).detach().clone()
-            cursors_before = (target.anchor_replay.cursor, target.course_replay.cursor)
-            with self.assertRaisesRegex(ValueError, field):
-                target.load_state_dict(checkpoint)
-            self.assertTrue(torch.equal(
-                next(target.discriminator.parameters()), parameter_before
-            ))
-            self.assertEqual(
-                (target.anchor_replay.cursor, target.course_replay.cursor), cursors_before
-            )
+        restored = AMPSession(self.Dataset(), "cpu", self._config(), amp_seed=7)
+        restored.load_state_dict(checkpoint)
+        self.assertEqual(restored.update_count, source.update_count)
+        self.assertEqual(restored.replay.cursor, source.replay.cursor)
+        a1, b1 = source.replay.sample(5)
+        a2, b2 = restored.replay.sample(5)
+        self.assertTrue(torch.equal(a1, a2))
+        self.assertTrue(torch.equal(b1, b2))
+        e1 = source.dataset.sample(5, "cpu")
+        e2 = restored.dataset.sample(5, "cpu")
+        self.assertTrue(torch.equal(e1[0], e2[0]))
+
+        incompatible = AMPSession(
+            self.Dataset(), "cpu", self._config(amp_reward_coef=0.02), amp_seed=7)
+        before = next(incompatible.discriminator.parameters()).detach().clone()
+        with self.assertRaisesRegex(ValueError, "amp_reward_coef"):
+            incompatible.load_state_dict(checkpoint)
+        self.assertTrue(torch.equal(
+            before, next(incompatible.discriminator.parameters()).detach()))
 
 
 if __name__ == "__main__":

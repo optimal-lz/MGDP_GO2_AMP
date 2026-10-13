@@ -4,7 +4,8 @@ import torch
 
 
 class AMPReplayBuffer:
-    def __init__(self, capacity: int, state_dim: int, device: str):
+    def __init__(self, capacity: int, state_dim: int, device: str,
+                 seed: int = 0):
         if capacity <= 0 or state_dim <= 0:
             raise ValueError("positive capacity and state_dim required")
         self.capacity = capacity
@@ -12,6 +13,8 @@ class AMPReplayBuffer:
         self.next_states = torch.empty_like(self.states)
         self.cursor = 0
         self.size = 0
+        self.generator = torch.Generator(device=device)
+        self.generator.manual_seed(int(seed))
 
     def insert(self, state, next_state):
         if state.shape != next_state.shape or state.ndim != 2 or state.shape[1] != self.states.shape[1]:
@@ -29,7 +32,9 @@ class AMPReplayBuffer:
     def sample(self, batch_size):
         if self.size == 0:
             raise ValueError("cannot sample empty AMP replay")
-        indices = torch.randint(self.size, (batch_size,), device=self.states.device)
+        indices = torch.randint(
+            self.size, (batch_size,), device=self.states.device,
+            generator=self.generator)
         return self.states[indices], self.next_states[indices]
 
     def state_dict(self):
@@ -40,11 +45,13 @@ class AMPReplayBuffer:
             "next_states": self.next_states.clone(),
             "cursor": self.cursor,
             "size": self.size,
+            "generator_state": self.generator.get_state().clone(),
         }
 
-    def load_state_dict(self, state):
+    def validate_state_dict(self, state):
         required = {
-            "capacity", "state_dim", "states", "next_states", "cursor", "size"
+            "capacity", "state_dim", "states", "next_states", "cursor", "size",
+            "generator_state",
         }
         missing = required.difference(state)
         if missing:
@@ -73,7 +80,12 @@ class AMPReplayBuffer:
             raise ValueError("AMP replay cursor out of range")
         if not 0 <= size <= self.capacity:
             raise ValueError("AMP replay size out of range")
+        if not torch.is_tensor(state["generator_state"]):
+            raise ValueError("AMP replay generator state is invalid")
+        return cursor, size
 
+    def load_state_dict(self, state):
+        cursor, size = self.validate_state_dict(state)
         states = state["states"].to(device=self.states.device, dtype=self.states.dtype)
         next_states = state["next_states"].to(
             device=self.next_states.device, dtype=self.next_states.dtype
@@ -82,3 +94,4 @@ class AMPReplayBuffer:
         self.next_states.copy_(next_states)
         self.cursor = cursor
         self.size = size
+        self.generator.set_state(state["generator_state"].cpu())
