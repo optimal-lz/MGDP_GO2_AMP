@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 from rl.MGDP.amp.motions import MotionDataset
 from rl.MGDP.amp.session import AMPSession
@@ -24,7 +25,17 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
     """Coordinate WM, PPO, and one optional AMP discriminator."""
 
     def __init__(self, env, train_cfg, log_dir=None, device="cpu"):
-        super().__init__(env, train_cfg, log_dir, device)
+        # Reuse MGDP model/storage construction without creating its legacy
+        # stage1_nn/stage1_tb output tree.
+        super().__init__(env, train_cfg, None, device)
+        self.log_dir = log_dir
+        self.nn_dir = None
+        self.tb_dir = (
+            str(Path(log_dir) / "tensorboard") if log_dir is not None else None)
+        self.writer = None
+        if self.tb_dir is not None:
+            Path(self.tb_dir).mkdir(parents=True, exist_ok=True)
+            self.writer = SummaryWriter(log_dir=self.tb_dir, flush_secs=10)
         self.train_cfg = train_cfg
         self.mode = self.cfg.get("mode", "amp")
         if self.mode not in ("amp", "no_amp"):
