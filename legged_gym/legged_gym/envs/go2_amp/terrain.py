@@ -1,42 +1,79 @@
-"""Pure Stage 1 terrain-column and logical-anchor allocation helpers."""
-
-from typing import Tuple
-
-import numpy as np
+"""Pure terrain contracts and curriculum math for the formal Go2 AMP task."""
 
 
-GO2_AMP_TERRAIN_COLUMNS: Tuple[str, ...] = (
-    "slope down",
-    "slope up",
-    "rough pyramid",
-    "stairs down",
-    "stairs up",
-    "discrete obstacles",
+TERRAIN_NAMES = (
+    "flat",
+    "rough_flat",
+    "smooth_slope",
+    "rough_slope",
+    "stairs",
+    "discrete_obstacles",
+    "hurdle",
+    "gap",
+    "pit",
+    "narrow_passage",
 )
 
-GO2_AMP_COURSE_COLUMN_CYCLE: Tuple[int, ...] = (0, 1, 2, 2, 3, 3, 4, 4, 5, 5)
+TERRAIN_CLASS_IDS = {name: index for index, name in enumerate(TERRAIN_NAMES)}
+
+TERRAIN_PROPORTIONS = (
+    0.10,
+    0.10,
+    0.10,
+    0.10,
+    0.15,
+    0.10,
+    0.10,
+    0.10,
+    0.10,
+    0.05,
+)
+
+# Twenty physical columns make the percentages exact rather than approximate.
+TERRAIN_COLUMNS = (
+    "flat", "flat",
+    "rough_flat", "rough_flat",
+    "smooth_slope", "smooth_slope",
+    "rough_slope", "rough_slope",
+    "stairs", "stairs", "stairs",
+    "discrete_obstacles", "discrete_obstacles",
+    "hurdle", "hurdle",
+    "gap", "gap",
+    "pit", "pit",
+    "narrow_passage",
+)
+
+# Temporary compatibility name for configuration imports created before the
+# formal single-stage terrain contract was frozen.
+GO2_AMP_TERRAIN_COLUMNS = TERRAIN_COLUMNS
 
 
-def compute_anchor_count(num_envs: int, fraction: float = 0.15) -> int:
-    """Return the logical-anchor quota while preserving one course environment."""
-    if num_envs < 2:
-        raise ValueError("Go2 AMP Stage 1 requires at least 2 environments")
-    return min(num_envs - 1, max(1, round(num_envs * fraction)))
+def difficulty_for_level(level, num_rows=20):
+    """Map an explicit curriculum row to the closed difficulty interval [0, 1]."""
+    if num_rows < 2 or level < 0 or level >= num_rows:
+        raise ValueError("terrain level must be inside a curriculum with at least two rows")
+    return float(level) / float(num_rows - 1)
 
 
-def assign_amp_columns(
-    num_envs: int,
-    fraction: float = 0.15,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Assign anchor-prefix and fixed-cycle course columns."""
-    anchor_count = compute_anchor_count(num_envs, fraction)
-    is_amp_anchor = np.zeros(num_envs, dtype=np.bool_)
-    is_amp_anchor[:anchor_count] = True
+def next_curriculum_levels(levels, forward_commands, progress,
+                           success_distance, early_failure,
+                           random_lower_levels, max_level=19):
+    """Return curriculum levels after forward-only success/failure updates.
 
-    columns = np.zeros(num_envs, dtype=np.int64)
-    course_count = num_envs - anchor_count
-    columns[anchor_count:] = np.resize(
-        np.asarray(GO2_AMP_COURSE_COLUMN_CYCLE, dtype=np.int64),
-        course_count,
-    )
-    return columns, is_amp_anchor
+    Inputs may be NumPy arrays or PyTorch tensors.  A supplied random lower
+    level is used only when a successful episode would advance beyond the top
+    row, matching MGDP's top-level recycling behavior without hiding RNG here.
+    """
+    updated = levels.clone() if hasattr(levels, "clone") else levels.copy()
+    forward = (forward_commands.bool() if hasattr(forward_commands, "bool")
+               else forward_commands.astype(bool))
+    failed = (early_failure.bool() if hasattr(early_failure, "bool")
+              else early_failure.astype(bool))
+    move_up = forward & (progress >= success_distance)
+    move_down = forward & failed & ~move_up
+    updated[move_up] += 1
+    updated[move_down] -= 1
+    updated[updated < 0] = 0
+    overflow = updated > max_level
+    updated[overflow] = random_lower_levels[overflow]
+    return updated

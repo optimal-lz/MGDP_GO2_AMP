@@ -1,90 +1,72 @@
 import ast
-from collections import Counter
 import importlib.util
+from collections import Counter
 from pathlib import Path
-import sys
 import unittest
 
 import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "legged_gym"))
-
 HELPER_PATH = ROOT / "legged_gym/legged_gym/envs/go2_amp/terrain.py"
-if not HELPER_PATH.is_file():
-    raise ImportError(f"missing pure Go2 AMP terrain helper: {HELPER_PATH}")
 SPEC = importlib.util.spec_from_file_location("go2_amp_terrain_helper", HELPER_PATH)
 TERRAIN_HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TERRAIN_HELPER)
-GO2_AMP_COURSE_COLUMN_CYCLE = TERRAIN_HELPER.GO2_AMP_COURSE_COLUMN_CYCLE
-GO2_AMP_TERRAIN_COLUMNS = TERRAIN_HELPER.GO2_AMP_TERRAIN_COLUMNS
-assign_amp_columns = TERRAIN_HELPER.assign_amp_columns
-compute_anchor_count = TERRAIN_HELPER.compute_anchor_count
 
 
-class TestAmpTerrainAllocation(unittest.TestCase):
-    def test_anchor_counts_and_smallest_supported_split(self):
-        self.assertEqual(compute_anchor_count(2), 1)
-        self.assertEqual(compute_anchor_count(64), 10)
-        self.assertEqual(compute_anchor_count(4096), 614)
-        for invalid in (-1, 0, 1):
-            with self.assertRaisesRegex(ValueError, "at least 2"):
-                compute_anchor_count(invalid)
+class TestAmpTerrainContract(unittest.TestCase):
+    def test_exact_names_ids_proportions_and_columns(self):
+        expected_names = (
+            "flat", "rough_flat", "smooth_slope", "rough_slope", "stairs",
+            "discrete_obstacles", "hurdle", "gap", "pit", "narrow_passage",
+        )
+        expected_counts = [2, 2, 2, 2, 3, 2, 2, 2, 2, 1]
 
-    def test_column_contract_and_prefix_allocation(self):
-        self.assertEqual(GO2_AMP_TERRAIN_COLUMNS, (
-            "slope down",
-            "slope up",
-            "rough pyramid",
-            "stairs down",
-            "stairs up",
-            "discrete obstacles",
-        ))
-        self.assertEqual(GO2_AMP_COURSE_COLUMN_CYCLE, (0, 1, 2, 2, 3, 3, 4, 4, 5, 5))
-
-        columns, anchors = assign_amp_columns(12)
-        self.assertEqual(columns.tolist(), [0, 0, 0, 1, 2, 2, 3, 3, 4, 4, 5, 5])
+        self.assertEqual(TERRAIN_HELPER.TERRAIN_NAMES, expected_names)
         self.assertEqual(
-            anchors.tolist(),
-            [True, True, False, False, False, False, False, False, False, False, False, False],
+            TERRAIN_HELPER.TERRAIN_CLASS_IDS,
+            {name: index for index, name in enumerate(expected_names)},
+        )
+        self.assertEqual(tuple(TERRAIN_HELPER.TERRAIN_PROPORTIONS),
+                         (0.10, 0.10, 0.10, 0.10, 0.15,
+                          0.10, 0.10, 0.10, 0.10, 0.05))
+        self.assertAlmostEqual(sum(TERRAIN_HELPER.TERRAIN_PROPORTIONS), 1.0)
+        counts = Counter(TERRAIN_HELPER.TERRAIN_COLUMNS)
+        self.assertEqual(len(TERRAIN_HELPER.TERRAIN_COLUMNS), 20)
+        self.assertEqual([counts[name] for name in expected_names], expected_counts)
+
+    def test_difficulty_spans_closed_unit_interval(self):
+        self.assertEqual(TERRAIN_HELPER.difficulty_for_level(0), 0.0)
+        self.assertEqual(TERRAIN_HELPER.difficulty_for_level(19), 1.0)
+        self.assertAlmostEqual(TERRAIN_HELPER.difficulty_for_level(9), 9 / 19)
+        with self.assertRaises(ValueError):
+            TERRAIN_HELPER.difficulty_for_level(-1)
+        with self.assertRaises(ValueError):
+            TERRAIN_HELPER.difficulty_for_level(20)
+
+
+class TestAmpTerrainCurriculum(unittest.TestCase):
+    def test_only_forward_commands_change_level(self):
+        levels = np.asarray([3, 3, 3, 3, 19])
+        forward = np.asarray([True, True, False, False, True])
+        progress = np.asarray([5.0, 0.1, 5.0, 0.1, 5.0])
+        early_failure = np.asarray([False, True, False, True, False])
+        random_lower = np.asarray([0, 0, 0, 0, 7])
+
+        updated = TERRAIN_HELPER.next_curriculum_levels(
+            levels, forward, progress, success_distance=4.0,
+            early_failure=early_failure, random_lower_levels=random_lower,
         )
 
-        columns, anchors = assign_amp_columns(8)
-        self.assertEqual(columns.tolist(), [0, 0, 1, 2, 2, 3, 3, 4])
-        self.assertEqual(anchors.tolist(), [True, False, False, False, False, False, False, False])
-        self.assertEqual(columns[0], columns[1])
-        self.assertNotEqual(bool(anchors[0]), bool(anchors[1]))
+        np.testing.assert_array_equal(updated, [4, 2, 3, 3, 7])
+        np.testing.assert_array_equal(levels, [3, 3, 3, 3, 19])
 
-        forbidden = {"flat", "hurdle", "gap", "ramp", "bream", "new stairs down", "pit"}
-        self.assertTrue(forbidden.isdisjoint(GO2_AMP_TERRAIN_COLUMNS))
-
-    def test_every_course_block_and_partial_block_follow_the_fixed_cycle(self):
-        for num_envs in range(2, 80):
-            columns, anchors = assign_amp_columns(num_envs)
-            self.assertTrue(np.all(columns[anchors] == 0))
-            course = columns[~anchors]
-            for start in range(0, len(course), len(GO2_AMP_COURSE_COLUMN_CYCLE)):
-                block = course[start:start + len(GO2_AMP_COURSE_COLUMN_CYCLE)]
-                self.assertEqual(
-                    block.tolist(),
-                    list(GO2_AMP_COURSE_COLUMN_CYCLE[:len(block)]),
-                )
-
-        counts = Counter(GO2_AMP_COURSE_COLUMN_CYCLE)
-        self.assertEqual([counts[index] for index in range(6)], [1, 1, 2, 2, 2, 2])
-
-    def test_4096_split_counts_anchor_and_course_zero_slopes(self):
-        columns, anchors = assign_amp_columns(4096)
-        self.assertEqual(int(anchors.sum()), 614)
-        self.assertEqual(int((~anchors).sum()), 3482)
-        course_zero_slopes = int(np.isin(columns[~anchors], [0, 1]).sum())
-        self.assertEqual(course_zero_slopes, 698)
-        self.assertEqual(int(anchors.sum()) + course_zero_slopes, 1312)
-        self.assertEqual(1312 / 4096, 0.3203125)
-
-        no_anchor = np.resize(np.asarray(GO2_AMP_COURSE_COLUMN_CYCLE), 4096)
-        self.assertEqual(int(np.isin(no_anchor, [0, 1]).sum()), 820)
+    def test_failed_level_zero_is_clamped(self):
+        updated = TERRAIN_HELPER.next_curriculum_levels(
+            np.asarray([0]), np.asarray([True]), np.asarray([0.0]), 4.0,
+            np.asarray([True]), np.asarray([0]),
+        )
+        np.testing.assert_array_equal(updated, [0])
 
 
 class _FakeTerrainUtils:
@@ -107,96 +89,88 @@ class _FakeTerrainUtils:
 def _load_named_builder():
     path = ROOT / "legged_gym/legged_gym/utils/new_terrains/add_mix_terrain.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    mapping = next(
-        node for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "GO2_AMP_TERRAIN_CLASS_IDS"
-                for target in node.targets)
-    )
-    function = next(
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "trimesh_terrain_by_name"
-    )
+    wanted = {"GO2_AMP_TERRAIN_CLASS_IDS", "trimesh_terrain_by_name"}
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id in wanted
+                for target in node.targets):
+            nodes.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name == "trimesh_terrain_by_name":
+            nodes.append(node)
     fake = _FakeTerrainUtils()
-    namespace = {"terrain_utils": fake}
-    module = ast.Module(body=[mapping, function], type_ignores=[])
+    helper_calls = []
+
+    def helper(name):
+        def record(_terrain, *args, **kwargs):
+            helper_calls.append((name, args, kwargs))
+        return record
+
+    namespace = {
+        "terrain_utils": fake,
+        "parkour_hurdle_terrain": helper("hurdle"),
+        "gap_terrain": helper("gap"),
+        "pit_terrain": helper("pit"),
+        "narrow_passage_terrain": helper("narrow"),
+        "clear_spawn_platform": helper("spawn"),
+    }
+    module = ast.Module(body=nodes, type_ignores=[])
     ast.fix_missing_locations(module)
     exec(compile(module, str(path), "exec"), namespace)
-    return namespace["trimesh_terrain_by_name"], namespace["GO2_AMP_TERRAIN_CLASS_IDS"], fake
+    return namespace["trimesh_terrain_by_name"], fake, helper_calls
 
 
 class TestAmpTerrainConstruction(unittest.TestCase):
-    def test_named_builder_uses_six_existing_primitives_and_stable_class_ids(self):
-        builder, class_ids, fake = _load_named_builder()
-        self.assertEqual(class_ids, {
-            "slope down": 0,
-            "slope up": 0,
-            "rough pyramid": 1,
-            "stairs down": 2,
-            "stairs up": 3,
-            "discrete obstacles": 4,
-        })
-        self.assertNotIn("flat", class_ids)
+    class Terrain:
+        horizontal_scale = 0.1
+        vertical_scale = 0.01
 
-        class Terrain:
-            horizontal_scale = 0.1
-
-        for name, expected_id in class_ids.items():
-            terrain = Terrain()
+    def test_every_named_builder_sets_stable_id_and_safe_spawn(self):
+        builder, _fake, helper_calls = _load_named_builder()
+        for expected_id, name in enumerate(TERRAIN_HELPER.TERRAIN_NAMES):
+            helper_calls.clear()
+            terrain = self.Terrain()
             builder(terrain, name, 0.5, lambda _terrain: None, 20)
             self.assertEqual(terrain.idx, expected_id)
-
-        fake.calls.clear()
-        builder(Terrain(), "slope down", 0.5, lambda _terrain: None, 20)
-        self.assertEqual(fake.calls[0], ("slope", {"slope": -0.2, "platform_size": 3.0}))
-        fake.calls.clear()
-        builder(Terrain(), "slope up", 0.5, lambda _terrain: None, 20)
-        self.assertEqual(fake.calls[0], ("slope", {"slope": 0.2, "platform_size": 3.0}))
-
-        for name in ("slope down", "slope up"):
-            fake.calls.clear()
-            builder(Terrain(), name, 0.0, lambda _terrain: None, 20)
-            self.assertEqual(fake.calls[0][1]["slope"], 0.0)
-
+            self.assertEqual(helper_calls[-1][0], "spawn")
         with self.assertRaisesRegex(ValueError, "unknown Go2 AMP terrain"):
-            builder(Terrain(), "flat", 0.0, lambda _terrain: None, 20)
+            builder(self.Terrain(), "crawl_tunnel", 0.5, lambda _terrain: None, 20)
 
-    def test_opt_in_builder_and_environment_keep_legacy_curriculum_boundary(self):
-        terrain_source = (
-            ROOT / "legged_gym/legged_gym/utils/terrain.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("explicit_terrain_columns", terrain_source)
-        self.assertIn("trimesh_terrain_by_name", terrain_source)
-        self.assertIn("choice = j / self.cfg.num_cols + 0.001", terrain_source)
-        self.assertIn("self.make_terrain(choice, difficulty)", terrain_source)
+    def test_geometry_gets_harder_monotonically(self):
+        builder, fake, helper_calls = _load_named_builder()
 
-        config_source = (
-            ROOT / "legged_gym/legged_gym/envs/go2_amp/config.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("num_cols = len(GO2_AMP_TERRAIN_COLUMNS)", config_source)
-        self.assertIn("explicit_terrain_columns = GO2_AMP_TERRAIN_COLUMNS", config_source)
+        def calls_at(name, difficulty):
+            fake.calls.clear()
+            helper_calls.clear()
+            builder(self.Terrain(), name, difficulty, lambda _terrain: None, 20)
+            return list(fake.calls), list(helper_calls)
 
-        env_path = ROOT / "legged_gym/legged_gym/envs/go2_amp/env.py"
-        tree = ast.parse(env_path.read_text(encoding="utf-8"))
-        class_node = next(
-            node for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "Go2AmpRandomDog"
-        )
-        methods = {
-            node.name: ast.unparse(node)
-            for node in class_node.body
-            if isinstance(node, ast.FunctionDef)
-        }
-        self.assertIn("set_amp_training_iteration", methods)
-        origins = methods["_get_env_origins"]
-        curriculum = methods["_update_terrain_curriculum"]
-        self.assertIn("self.is_amp_anchor", origins)
-        self.assertIn("assign_amp_columns", origins)
-        self.assertIn("self.terrain_levels[anchor_ids] = 0", curriculum)
-        self.assertIn("self.terrain_types[anchor_ids] = 0", curriculum)
-        self.assertIn("super()._update_terrain_curriculum(course_ids)", curriculum)
-        self.assertNotIn("terrain_types == 0", curriculum)
-        self.assertNotIn("env_class ==", curriculum)
+        low, _ = calls_at("smooth_slope", 0.0)
+        high, _ = calls_at("smooth_slope", 1.0)
+        self.assertLess(low[0][1]["slope"], high[0][1]["slope"])
+
+        low, _ = calls_at("stairs", 0.0)
+        high, _ = calls_at("stairs", 1.0)
+        self.assertLess(low[0][1]["step_height"], high[0][1]["step_height"])
+
+        for name, helper_name, key, direction in (
+            ("hurdle", "hurdle", "hurdle_height", 1),
+            ("gap", "gap", "gap_size", 1),
+            ("pit", "pit", "depth", 1),
+            ("narrow_passage", "narrow", "passage_width", -1),
+        ):
+            _, low_helpers = calls_at(name, 0.0)
+            _, high_helpers = calls_at(name, 1.0)
+            low_value = next(item[2][key] for item in low_helpers if item[0] == helper_name)
+            high_value = next(item[2][key] for item in high_helpers if item[0] == helper_name)
+            self.assertGreater(direction * high_value, direction * low_value)
+
+    def test_explicit_curriculum_uses_closed_interval_without_changing_legacy(self):
+        source = (ROOT / "legged_gym/legged_gym/utils/terrain.py").read_text(encoding="utf-8")
+        self.assertIn("difficulty = i / (self.cfg.num_rows - 1)", source)
+        self.assertIn("difficulty = i / self.cfg.num_rows", source)
+        self.assertIn("self.make_terrain_by_name(explicit_columns[j], difficulty)", source)
+        self.assertIn("self.make_terrain(choice, difficulty)", source)
 
 
 if __name__ == "__main__":

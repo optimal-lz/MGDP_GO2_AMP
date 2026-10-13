@@ -4,56 +4,109 @@ import random
 
 
 GO2_AMP_TERRAIN_CLASS_IDS = {
-    "slope down": 0,
-    "slope up": 0,
-    "rough pyramid": 1,
-    "stairs down": 2,
-    "stairs up": 3,
-    "discrete obstacles": 4,
+    "flat": 0,
+    "rough_flat": 1,
+    "smooth_slope": 2,
+    "rough_slope": 3,
+    "stairs": 4,
+    "discrete_obstacles": 5,
+    "hurdle": 6,
+    "gap": 7,
+    "pit": 8,
+    "narrow_passage": 9,
 }
 
 
 def trimesh_terrain_by_name(terrain, terrain_name, difficulty, add_roughness, num_rows):
-    """Build one of the six explicit Go2 AMP Stage 1 terrain columns."""
+    """Build one formal Go2 AMP terrain with monotonic geometry difficulty."""
     if terrain_name not in GO2_AMP_TERRAIN_CLASS_IDS:
         raise ValueError(f"unknown Go2 AMP terrain: {terrain_name}")
 
-    slope = difficulty * 0.4
-    step_height = 0.05 + 0.18 * difficulty
-    discrete_obstacles_height = 0.05 + difficulty * 0.2
+    difficulty = min(1.0, max(0.0, float(difficulty)))
+    slope = 0.4 * difficulty
+    roughness = 0.005 + 0.045 * difficulty
+    step_height = 0.03 + 0.17 * difficulty
+    obstacle_height = 0.03 + 0.17 * difficulty
 
-    if terrain_name == "slope down":
-        terrain_utils.pyramid_sloped_terrain(terrain, slope=-slope, platform_size=3.0)
-    elif terrain_name == "slope up":
+    if terrain_name == "rough_flat":
+        terrain_utils.random_uniform_terrain(
+            terrain, min_height=-roughness, max_height=roughness,
+            step=0.005, downsampled_scale=0.2,
+        )
+    elif terrain_name == "smooth_slope":
         terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.0)
-    elif terrain_name == "rough pyramid":
+    elif terrain_name == "rough_slope":
         terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.0)
         terrain_utils.random_uniform_terrain(
-            terrain,
-            min_height=-0.05,
-            max_height=0.05,
-            step=0.005,
-            downsampled_scale=0.2,
+            terrain, min_height=-roughness, max_height=roughness,
+            step=0.005, downsampled_scale=0.2,
         )
-    elif terrain_name == "stairs down":
-        terrain_utils.pyramid_stairs_terrain(
-            terrain, step_width=0.31, step_height=-step_height, platform_size=3.0
-        )
-    elif terrain_name == "stairs up":
+    elif terrain_name == "stairs":
         terrain_utils.pyramid_stairs_terrain(
             terrain, step_width=0.31, step_height=step_height, platform_size=3.0
         )
-    elif terrain_name == "discrete obstacles":
+    elif terrain_name == "discrete_obstacles":
         terrain_utils.discrete_obstacles_terrain(
-            terrain,
-            discrete_obstacles_height,
-            1.0,
-            2.5,
-            20,
-            platform_size=3.0,
+            terrain, obstacle_height, 0.5, 1.5, 20, platform_size=3.0,
+        )
+    elif terrain_name == "hurdle":
+        parkour_hurdle_terrain(
+            terrain, num_stones=4, x_range=[1.2, 2.0],
+            hurdle_height=0.05 + 0.20 * difficulty, platform_size=2.0,
+        )
+    elif terrain_name == "gap":
+        gap_terrain(
+            terrain, gap_size=0.10 + 0.70 * difficulty,
+            depth=1.0, platform_size=2.0,
+        )
+    elif terrain_name == "pit":
+        pit_terrain(
+            terrain, depth=0.05 + 0.45 * difficulty, platform_size=4.0,
+        )
+    elif terrain_name == "narrow_passage":
+        narrow_passage_terrain(
+            terrain, passage_width=1.20 - 0.50 * difficulty,
+            wall_height=0.20 + 0.30 * difficulty, platform_size=2.0,
         )
 
+    clear_spawn_platform(terrain, platform_size=2.0)
     terrain.idx = GO2_AMP_TERRAIN_CLASS_IDS[terrain_name]
+
+
+def clear_spawn_platform(terrain, platform_size=2.0):
+    """Clear a centered spawn square shared by all explicit terrain types."""
+    half = max(1, int(platform_size / terrain.horizontal_scale / 2))
+    center_x = terrain.height_field_raw.shape[0] // 2
+    center_y = terrain.height_field_raw.shape[1] // 2
+    terrain.height_field_raw[
+        center_x - half:center_x + half,
+        center_y - half:center_y + half,
+    ] = 0
+
+
+def gap_terrain(terrain, gap_size, depth=1.0, platform_size=2.0):
+    """Create a moat around the centered safe spawn platform."""
+    gap = max(1, int(gap_size / terrain.horizontal_scale))
+    half_platform = max(1, int(platform_size / terrain.horizontal_scale / 2))
+    center_x = terrain.height_field_raw.shape[0] // 2
+    center_y = terrain.height_field_raw.shape[1] // 2
+    outer = half_platform + gap
+    floor = -max(1, int(depth / terrain.vertical_scale))
+    terrain.height_field_raw[
+        center_x - outer:center_x + outer,
+        center_y - outer:center_y + outer,
+    ] = floor
+
+
+def narrow_passage_terrain(terrain, passage_width, wall_height,
+                           platform_size=2.0):
+    """Create a straight, open-roof corridor without forcing a low posture."""
+    half_width = max(1, int(passage_width / terrain.horizontal_scale / 2))
+    center_y = terrain.height_field_raw.shape[1] // 2
+    start_x = int(platform_size / terrain.horizontal_scale)
+    wall = max(1, int(wall_height / terrain.vertical_scale))
+    terrain.height_field_raw[start_x:, :center_y - half_width] = wall
+    terrain.height_field_raw[start_x:, center_y + half_width:] = wall
 
 
 def trimesh_terrain(terrain, choice, difficulty, slope,
