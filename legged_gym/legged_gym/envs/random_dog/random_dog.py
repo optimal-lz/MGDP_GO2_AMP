@@ -429,7 +429,9 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
         save_dir = getattr(self.cfg.camera, 'compare_vis_save_dir', None)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(save_dir, 'latest.png'), combined_bgr)
+            filename = getattr(
+                self.cfg.camera, 'compare_vis_filename', 'latest.png')
+            cv2.imwrite(os.path.join(save_dir, filename), combined_bgr)
 
         if not getattr(self, '_depth_vis_window_ready', False):
             try:
@@ -457,7 +459,9 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
         save_dir = getattr(self.cfg.camera, 'compare_height_vis_save_dir', None)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(save_dir, 'latest.png'), combined_bgr)
+            filename = getattr(
+                self.cfg.camera, 'compare_height_vis_filename', 'latest.png')
+            cv2.imwrite(os.path.join(save_dir, filename), combined_bgr)
 
         if not getattr(self, '_height_vis_window_ready', False):
             try:

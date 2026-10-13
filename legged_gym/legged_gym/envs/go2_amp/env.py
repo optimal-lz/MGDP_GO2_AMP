@@ -287,20 +287,32 @@ class Go2AmpRandomDog(Randomdog):
 
     def reset_idx(self, env_ids):
         terminal_packet = None
+        terminal_diagnostics = None
         if env_ids.numel() > 0:
             terminal_packet = (
                 env_ids.clone(),
                 self.get_amp_observations()[env_ids].clone(),
             )
+            terminal_diagnostics = {
+                "env_ids": env_ids.clone(),
+                "commands": self.commands[env_ids].clone(),
+                "base_lin_vel": self.base_lin_vel[env_ids].clone(),
+                "base_ang_vel": self.base_ang_vel[env_ids].clone(),
+                "terrain_levels": self.terrain_levels[env_ids].clone(),
+                "terrain_classes": self.env_class[env_ids].clone(),
+                "time_outs": self.time_out_buf[env_ids].clone(),
+            }
         super().reset_idx(env_ids)
         if env_ids.numel() > 0:
             self._reset_amp_histories(env_ids)
             self._amp_previous_state[env_ids] = (
                 self.get_amp_observations()[env_ids].clone())
             self.extras["terminal_amp_states"] = terminal_packet
+            self.extras["terminal_diagnostics"] = terminal_diagnostics
 
     def step(self, actions):
         self.extras.pop("terminal_amp_states", None)
+        self.extras.pop("terminal_diagnostics", None)
         locomotion_before = self.get_locomotion_mask().clone()
         epoch_before = self.command_epoch.clone()
         obs, rewards, dones, extras = super().step(actions)

@@ -33,10 +33,15 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         self.tb_dir = (
             str(Path(log_dir) / "tensorboard") if log_dir is not None else None)
         self.writer = None
-        if self.tb_dir is not None:
+        self.train_cfg = train_cfg
+        self.evaluation_mode = bool(train_cfg.get("_evaluation", False))
+        checkpoint_num_envs = int(
+            train_cfg.get("_checkpoint_num_envs", self.env.num_envs))
+        checkpoint_key_config = train_cfg.get(
+            "_checkpoint_key_config", train_cfg)
+        if self.tb_dir is not None and not self.evaluation_mode:
             Path(self.tb_dir).mkdir(parents=True, exist_ok=True)
             self.writer = SummaryWriter(log_dir=self.tb_dir, flush_secs=10)
-        self.train_cfg = train_cfg
         self.mode = self.cfg.get("mode", "amp")
         if self.mode not in ("amp", "no_amp"):
             raise ValueError("runner mode must be 'amp' or 'no_amp'")
@@ -55,7 +60,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             amp_cfg = dict(self.cfg)
             amp_cfg.update({
                 "amp_reward_coef": train_cfg["amp"]["reward_coef"],
-                "num_envs": self.env.num_envs,
+                "num_envs": checkpoint_num_envs,
                 "num_steps_per_env": self.num_steps_per_env,
             })
             self.amp = AMPSession(dataset, self.device, amp_cfg, amp_seed)
@@ -66,8 +71,8 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             mode=self.mode,
             amp_reward_coef=reward_coef,
             seed=train_cfg.get("seed", 1),
-            num_envs=self.env.num_envs,
-            key_config=train_cfg,
+            num_envs=checkpoint_num_envs,
+            key_config=checkpoint_key_config,
         )
         self.checkpoints = (
             PairedCheckpointManager(
@@ -309,7 +314,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                 and "memory_encoder" not in state["networks"]):
             raise ValueError("world-model checkpoint missing memory network")
 
-    def load_world_model_state_dict(self, state):
+    def load_world_model_state_dict(self, state, load_optimizer=True):
         self._validate_world_model_state(state)
         networks = state["networks"]
         self.env.cnn_encoder.load_state_dict(networks["image_encoder"])
@@ -319,7 +324,8 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             self.env.map_decoder.load_state_dict(networks["map_decoder"])
         if getattr(self.env, "use_memory", False):
             self.env.memory_lstm.load_state_dict(networks["memory_encoder"])
-        self.env.wm_optimizer.load_state_dict(state["wm_optimizer"])
+        if load_optimizer:
+            self.env.wm_optimizer.load_state_dict(state["wm_optimizer"])
         for name, value in state["depth_stats"].items():
             setattr(self.env, name, float(value))
 
@@ -333,7 +339,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             self.checkpoint_compatibility,
         )
 
-    def load_pair(self, manifest=None):
+    def load_pair(self, manifest=None, restore_training_state=True):
         if self.checkpoints is None:
             raise ValueError("checkpoint output is disabled")
         manifest = (
@@ -343,8 +349,18 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         # Validate both halves before mutating either live subsystem.
         self._validate_policy_state(policy_state, self.mode)
         self._validate_world_model_state(wm_state)
-        self.load_state_dict(policy_state)
-        self.load_world_model_state_dict(wm_state)
+        if restore_training_state:
+            self.load_state_dict(policy_state)
+            self.load_world_model_state_dict(wm_state)
+        else:
+            self.alg.actor_critic.load_state_dict(
+                policy_state["actor_state_dict"])
+            if self.amp is not None:
+                self.amp.load_state_dict(policy_state["amp_state"])
+            self.load_world_model_state_dict(
+                wm_state, load_optimizer=False)
+            self.current_learning_iteration = int(policy_state["iteration"])
+            self.current_learning_iteration_init = self.current_learning_iteration
         return metadata
 
     def get_inference_policy(self, device=None):
