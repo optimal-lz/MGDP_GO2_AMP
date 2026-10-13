@@ -11,10 +11,10 @@ sys.path.insert(0, str(ROOT / "legged_gym"))
 from rl.MGDP.amp.motions import MotionDataset
 
 
-def write_clip(path, value, frames=3, dt=0.02):
+def write_clip(path, value, frames=3, dt=0.02, weight=1):
     row = [0.0] * 61
     row[7:19] = [value] * 12
-    path.write_text(json.dumps({"FrameDuration": dt, "MotionWeight": 1,
+    path.write_text(json.dumps({"FrameDuration": dt, "MotionWeight": weight,
                                 "Frames": [row] * frames}), encoding="utf-8")
 
 
@@ -35,6 +35,7 @@ class TestMotionData(unittest.TestCase):
         self.assertEqual(len(enabled), 8)
         self.assertNotIn("go2_stance.txt", enabled)
         self.assertNotIn("go2_forward_faster.txt", enabled)
+        self.assertEqual(set(assignments["AMP_EXPERT_GROUPS"]), {"forward", "turn"})
         MotionDataset(ROOT / "datasets/go2_motion", assignments["AMP_EXPERT_GROUPS"],
                       assignments["AMP_EXPERT_GROUP_WEIGHTS"], 0.02)
         for motion_file in sorted(motion_files):
@@ -72,6 +73,49 @@ class TestMotionData(unittest.TestCase):
             counts = np.bincount(a[:, 0].astype(int), minlength=4) / len(a)
             np.testing.assert_allclose(counts[1:], [0.1, 0.7, 0.2], atol=0.02)
 
+    def test_motion_weight_is_applied_within_a_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_clip(root / "rare.txt", 1, weight=1)
+            write_clip(root / "common.txt", 2, weight=3)
+            data = MotionDataset(root, {"forward": ["rare.txt", "common.txt"]},
+                                 {"forward": 1.0}, 0.02)
+
+            a, _ = data.sample_group_numpy(10000, "forward", np.random.default_rng(8))
+
+            counts = np.bincount(a[:, 0].astype(int), minlength=3) / len(a)
+            np.testing.assert_allclose(counts[1:], [0.25, 0.75], atol=0.02)
+
+    def test_group_specific_sampling_never_uses_another_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_clip(root / "forward.txt", 11)
+            write_clip(root / "turn.txt", 22)
+            data = MotionDataset(root, {"forward": ["forward.txt"], "turn": ["turn.txt"]},
+                                 {"forward": 0.8, "turn": 0.2}, 0.02)
+
+            forward, _ = data.sample_group_numpy(50, "forward", np.random.default_rng(3))
+            turn, _ = data.sample_group_numpy(50, "turn", np.random.default_rng(4))
+
+            self.assertEqual(set(forward[:, 0]), {11.0})
+            self.assertEqual(set(turn[:, 0]), {22.0})
+
+    def test_dataset_uses_caller_owned_rng_when_one_is_not_passed_per_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_clip(root / "a.txt", 1)
+            write_clip(root / "b.txt", 2)
+            first = MotionDataset(root, {"x": ["a.txt", "b.txt"]}, {"x": 1.0}, 0.02,
+                                  rng=np.random.default_rng(12))
+            second = MotionDataset(root, {"x": ["a.txt", "b.txt"]}, {"x": 1.0}, 0.02,
+                                   rng=np.random.default_rng(12))
+
+            a1, b1 = first.sample_numpy(32)
+            a2, b2 = second.sample_numpy(32)
+
+            np.testing.assert_array_equal(a1, a2)
+            np.testing.assert_array_equal(b1, b2)
+
     def test_invalid_file_names_itself(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -81,6 +125,7 @@ class TestMotionData(unittest.TestCase):
             for metadata in (
                 {"FrameDuration": 0.0, "MotionWeight": 1, "Frames": [[0] * 61] * 3},
                 {"FrameDuration": 0.001, "MotionWeight": 1, "Frames": [[0] * 61] * 3},
+                {"FrameDuration": 0.04, "MotionWeight": 1, "Frames": [[0] * 61] * 3},
                 {"FrameDuration": 0.02, "MotionWeight": 1,
                  "Frames": [[float("nan")] * 61] * 3},
             ):
@@ -89,6 +134,14 @@ class TestMotionData(unittest.TestCase):
                     MotionDataset(root, {"x": ["bad.txt"]}, {"x": 1}, 0.02)
             with self.assertRaisesRegex(ValueError, "missing.txt"):
                 MotionDataset(root, {"x": ["missing.txt"]}, {"x": 1}, 0.02)
+
+    def test_unknown_group_names_itself(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_clip(root / "walk.txt", 1)
+            data = MotionDataset(root, {"forward": ["walk.txt"]}, {"forward": 1}, 0.02)
+            with self.assertRaisesRegex(ValueError, "turn"):
+                data.sample_group_numpy(1, "turn", np.random.default_rng(1))
 
 
 if __name__ == "__main__":
