@@ -298,6 +298,7 @@ class Go2AmpRandomDog(Randomdog):
                 "commands": self.commands[env_ids].clone(),
                 "base_lin_vel": self.base_lin_vel[env_ids].clone(),
                 "base_ang_vel": self.base_ang_vel[env_ids].clone(),
+                "root_positions": self.root_states[env_ids, :3].clone(),
                 "terrain_levels": self.terrain_levels[env_ids].clone(),
                 "terrain_classes": self.env_class[env_ids].clone(),
                 "time_outs": self.time_out_buf[env_ids].clone(),
