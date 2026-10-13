@@ -368,7 +368,7 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
             else:
                 self.obs_dict['image_buf'] = visual_token.to(self.device).detach()
         else:
-            self.obs_dict['image_buf'] = self.image_buf.to(self.device)
+            self.obs_dict['image_buf'] = self.image_buf.to(self.device).detach()
 
     @staticmethod
     def depth_to_vis_uint8(img, stretch_low_contrast=True, vmin=None, vmax=None):
@@ -719,9 +719,9 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                 visual_token = self.cnn_encoder(x_cnn)
                 if self.use_memory:
                     visual_token, self.hidden_states = self.memory_lstm(visual_token, None)
-                self.obs_dict['image_buf'] = visual_token.to(self.device)
+                self.obs_dict['image_buf'] = visual_token.to(self.device).detach()
             else:
-                self.obs_dict['image_buf'] = self.image_buf.to(self.device)
+                self.obs_dict['image_buf'] = self.image_buf.to(self.device).detach()
         else:
             pass
         return self.obs_dict

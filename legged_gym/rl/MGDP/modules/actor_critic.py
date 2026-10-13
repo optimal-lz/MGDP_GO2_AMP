@@ -19,11 +19,12 @@ class ActorCritic(nn.Module):
                 [key for key in kwargs.keys()]))
         super(ActorCritic, self).__init__()
 
-        output_nums = kwargs['MLPModule_info']['hidden_dims'][2]
+        proprio_dim = kwargs['MLPModule_info']['hidden_dims'][2]
         camera_dim = kwargs.get('CNNModule_info', {}).get('output_channels', 64)
+        privileged_dim = 194
 
-        self.num_actor_input = num_obs + camera_dim + output_nums
-        self.num_critic_input = num_obs + output_nums + 187  # 45 + 7 + 187 = 239（vel 3 + foot 4 + height 187）
+        self.num_actor_input = num_obs + camera_dim + proprio_dim
+        self.num_critic_input = num_obs + privileged_dim
 
         activation = get_activation(activation)
 
@@ -109,25 +110,31 @@ class ActorCritic(nn.Module):
         _, _, value, extrin = self._actor_critic(obs_dict)
         return value, extrin
 
+    def build_actor_input(self, obs_dict, return_tokens=False):
+        """Build deployable Actor input and stop gradients at the WM boundary."""
+        proprioceptive_token = self.mlp_encoder(obs_dict['proprio_hist'])
+        visual_token = obs_dict['image_buf'].detach()
+        actor_obs = torch.cat(
+            [obs_dict['obs'], proprioceptive_token, visual_token], dim=-1)
+        if return_tokens:
+            visual_tokens_height = visual_token[:, 0:32]
+            visual_tokens_image = visual_token[:, 32:]
+            return actor_obs, [
+                proprioceptive_token,
+                visual_tokens_height,
+                visual_tokens_image,
+            ]
+        return actor_obs
+
+    def build_critic_input(self, obs_dict):
+        """Build the 239D asymmetric Critic input without a WM token."""
+        return torch.cat(
+            [obs_dict['obs'], obs_dict['privileged_info']], dim=-1)
+
 
     def _actor_critic(self, obs_dict):
-
-        obs_vel = obs_dict['privileged_info'][:, 0:3]
-        obs_foot_height = obs_dict['privileged_info'][:, 3:7]
-        obs_height = obs_dict['privileged_info'][:, 7:]
-
-        proprioceptive_token = self.mlp_encoder(obs_dict['proprio_hist'])
-
-        visual_token = obs_dict['image_buf']
-        visual_tokens_height, visual_tokens_image = visual_token[:, 0:32], visual_token[:, 32:]
-
-        actor_obs = torch.cat([obs_dict['obs'], proprioceptive_token[:, 0:3],  proprioceptive_token[:, 3:],
-                               visual_tokens_height, visual_tokens_image],  dim=-1)  ## 45 + 3 + 4 + 16
-
-
-        critic_obs = torch.cat([obs_dict['obs'], obs_vel, obs_foot_height, obs_height], dim=-1)  ## 45+7+16 + 4 + 31 = 235
-
-        extrin = [proprioceptive_token, visual_tokens_height, visual_tokens_image]
+        actor_obs, extrin = self.build_actor_input(obs_dict, return_tokens=True)
+        critic_obs = self.build_critic_input(obs_dict)
 
         mu = self.actor(actor_obs)
         value = self.critic(critic_obs)
