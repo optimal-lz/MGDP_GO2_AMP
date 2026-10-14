@@ -69,7 +69,25 @@ class TestGo2AmpRunnerSource(unittest.TestCase):
         source = (ROOT / "legged_gym/rl/MGDP/algorithms/ppo.py").read_text(
             encoding="utf-8")
         self.assertIn("self.last_update_metrics", source)
+        self.assertIn('"ppo/entropy"', source)
+        self.assertIn('"ppo/kl"', source)
         self.assertIn("return mean_value_loss, mean_surrogate_loss, mean_vel_loss, mean_feet_loss, mean_cnn_loss", source)
+
+    def test_runner_populates_the_frozen_lightweight_metric_schema(self):
+        source = self.source
+        for tag in (
+                "reward/regularization", "tracking/vx_error",
+                "tracking/yaw_error", "episode/length",
+                "episode/base_contact_failure", "wm/total_loss",
+                "wm/depth_loss", "wm/height_loss", "wm/contrastive_loss",
+                "performance/iteration_seconds", "amp/valid_transition_count",
+                "amp/replay_fill", "timing/simulation_seconds",
+                "timing/wm_seconds", "timing/ppo_seconds",
+                "timing/discriminator_seconds"):
+            self.assertIn(tag, source)
+        self.assertIn("TERRAIN_NAMES", source)
+        self.assertIn("expert_forward_logit", source)
+        self.assertIn("expert_turn_logit", source)
 
 
 if __name__ == "__main__":

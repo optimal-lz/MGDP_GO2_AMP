@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import uuid
@@ -16,6 +17,43 @@ def _canonical_json(value):
 def canonical_config_hash(config):
     payload = _canonical_json(config).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def restore_ppo_learning_rate(algorithm, learning_rate):
+    """Restore PPO's adaptive scalar and every optimizer parameter group."""
+    learning_rate = float(learning_rate)
+    if not math.isfinite(learning_rate) or learning_rate <= 0.0:
+        raise ValueError("PPO learning rate must be finite and positive")
+    algorithm.learning_rate = learning_rate
+    for group in algorithm.optimizer.param_groups:
+        group["lr"] = learning_rate
+
+
+def _copy_array(destination, source):
+    if hasattr(destination, "copy_"):
+        destination.copy_(source)
+    else:
+        destination[...] = source
+
+
+def validate_terrain_state(env, terrain_levels):
+    """Validate curriculum rows before any checkpoint state is mutated."""
+    if tuple(terrain_levels.shape) != tuple(env.terrain_levels.shape):
+        raise ValueError("checkpoint terrain_levels shape mismatch")
+    invalid = ((terrain_levels < 0)
+               | (terrain_levels >= int(env.max_terrain_level)))
+    if bool(invalid.any()):
+        raise ValueError("checkpoint terrain_levels are outside valid range")
+
+
+def restore_terrain_state(env, terrain_levels):
+    """Restore curriculum rows and synchronize their derived lookup state."""
+    validate_terrain_state(env, terrain_levels)
+    _copy_array(env.terrain_levels, terrain_levels)
+    origins = env.terrain_origins[env.terrain_levels, env.terrain_types]
+    classes = env.terrain_class[env.terrain_levels, env.terrain_types]
+    _copy_array(env.env_origins, origins)
+    _copy_array(env.env_class, classes)
 
 
 @dataclass(frozen=True)

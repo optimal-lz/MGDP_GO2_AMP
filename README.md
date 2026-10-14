@@ -118,7 +118,7 @@ python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 -
 python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1 --headless
 ```
 
-若要新建不同 AMP 系数实验，可在首次启动时传入例如 `--amp_reward_coef 0.005`，将得到独立目录 `amp_coef0p005_seed1`。续训必须保持 mode、系数、seed、环境数与完整配置一致；noAMP 不接受 AMP 系数参数。
+若要新建不同 AMP 系数实验，可在首次启动时传入例如 `--amp_coef 0.005`，将得到独立目录 `amp_coef0p005_seed1`。续训必须保持 mode、系数、seed、环境数与完整配置一致；noAMP 不接受 AMP 系数参数。
 
 ## 实验目录与严格续训
 

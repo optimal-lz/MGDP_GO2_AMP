@@ -54,6 +54,11 @@ class MotionDataset:
                                     motion_weight)
 
     def sample_numpy(self, count: int, rng=None) -> Tuple[np.ndarray, np.ndarray]:
+        a, b, _ = self.sample_numpy_with_groups(count, rng)
+        return a, b
+
+    def sample_numpy_with_groups(self, count: int, rng=None):
+        """Sample weighted transitions and return their stable group indices."""
         if count <= 0:
             raise ValueError("count must be positive")
         rng = rng if rng is not None else self.rng
@@ -65,7 +70,7 @@ class MotionDataset:
             if not len(rows):
                 continue
             self._fill_group(a, b, rows, group_name, rng)
-        return a, b
+        return a, b, groups.astype(np.int64, copy=False)
 
     def sample_group_numpy(self, count: int, group: str, rng=None):
         """Sample transitions only from ``group``, respecting MotionWeight."""
@@ -105,6 +110,15 @@ class MotionDataset:
         import torch
         a, b = self.sample_numpy(count)
         return torch.as_tensor(a, device=device), torch.as_tensor(b, device=device)
+
+    def sample_with_groups(self, count: int, device: str):
+        import torch
+        a, b, groups = self.sample_numpy_with_groups(count)
+        return (
+            torch.as_tensor(a, device=device),
+            torch.as_tensor(b, device=device),
+            torch.as_tensor(groups, device=device, dtype=torch.long),
+        )
 
     def sample_group(self, count: int, group: str, device: str):
         import torch

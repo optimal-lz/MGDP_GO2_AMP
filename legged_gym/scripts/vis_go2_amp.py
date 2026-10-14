@@ -16,6 +16,9 @@ import numpy as np
 import torch
 
 from legged_gym.envs import *  # noqa: F401,F403 - registers go2_amp
+from legged_gym.envs.baseline.randomization import (
+    disable_evaluation_stochasticity,
+)
 from legged_gym.envs.go2_amp.terrain import TERRAIN_NAMES
 from legged_gym.utils import task_registry
 from rl.MGDP.amp.transition import select_next_amp_state
@@ -82,12 +85,14 @@ def _sim_device(args):
 
 
 def _disable_randomization(env_cfg):
+    disable_evaluation_stochasticity(env_cfg)
     env_cfg.noise.add_noise = False
     env_cfg.camera.update_wm = False
     env_cfg.domain_rand.push_robots = False
     for name in (
             "randomize_friction", "randomize_action_latency",
-            "randomize_base_mass", "randomize_limb_mass", "randomize_com",
+            "randomize_base_mass", "randomize_link_mass",
+            "randomize_restitution", "randomize_com",
             "randomize_motor_strength", "randomize_lag_timesteps",
             "randomize_motor_offset", "randomize_gains"):
         if hasattr(env_cfg.domain_rand, name):

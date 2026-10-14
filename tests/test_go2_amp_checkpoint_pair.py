@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import pickle
 import tempfile
+from types import SimpleNamespace
 import unittest
+
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -166,9 +169,51 @@ class TestPairedCheckpointManager(unittest.TestCase):
         for required in (
                 "random.getstate", "np.random.get_state",
                 "torch.random.get_rng_state", "torch.cuda.get_rng_state_all",
-                "wm_optimizer", "depth_stats", "save_pair", "load_pair"):
+                "wm_optimizer", "depth_stats", "save_pair", "load_pair",
+                '"ppo_learning_rate"', "restore_ppo_learning_rate",
+                "validate_terrain_state", "restore_terrain_state"):
             self.assertIn(required, source)
         self.assertIn('if self.amp is not None:', source)
+        validation = source[source.index("def _validate_policy_state"):
+                            source.index("def load_state_dict")]
+        self.assertIn("validate_terrain_state", validation)
+
+    def test_adaptive_learning_rate_is_restored_into_scalar_and_optimizer(self):
+        optimizer = SimpleNamespace(param_groups=[{"lr": 1e-3}, {"lr": 1e-3}])
+        algorithm = SimpleNamespace(learning_rate=1e-3, optimizer=optimizer)
+        self.module.restore_ppo_learning_rate(algorithm, 2.5e-4)
+        self.assertEqual(algorithm.learning_rate, 2.5e-4)
+        self.assertEqual([group["lr"] for group in optimizer.param_groups],
+                         [2.5e-4, 2.5e-4])
+        with self.assertRaisesRegex(ValueError, "learning rate"):
+            self.module.restore_ppo_learning_rate(algorithm, float("nan"))
+        self.assertEqual(algorithm.learning_rate, 2.5e-4)
+
+    def test_terrain_restore_updates_all_derived_environment_state(self):
+        terrain_origins = np.arange(4 * 3 * 3).reshape(4, 3, 3)
+        terrain_class = np.arange(4 * 3).reshape(4, 3)
+        env = SimpleNamespace(
+            terrain_levels=np.zeros(3, dtype=np.int64),
+            terrain_types=np.array([0, 1, 2], dtype=np.int64),
+            terrain_origins=terrain_origins,
+            terrain_class=terrain_class,
+            env_origins=np.zeros((3, 3), dtype=np.int64),
+            env_class=np.zeros(3, dtype=np.int64),
+            max_terrain_level=4,
+        )
+        self.module.restore_terrain_state(
+            env, np.array([3, 2, 1], dtype=np.int64))
+        np.testing.assert_array_equal(env.terrain_levels, [3, 2, 1])
+        np.testing.assert_array_equal(
+            env.env_origins, terrain_origins[[3, 2, 1], [0, 1, 2]])
+        np.testing.assert_array_equal(
+            env.env_class, terrain_class[[3, 2, 1], [0, 1, 2]])
+        with self.assertRaisesRegex(ValueError, "shape"):
+            self.module.restore_terrain_state(
+                env, np.array([1, 2], dtype=np.int64))
+        with self.assertRaisesRegex(ValueError, "range"):
+            self.module.restore_terrain_state(
+                env, np.array([0, 1, 4], dtype=np.int64))
 
 
 if __name__ == "__main__":

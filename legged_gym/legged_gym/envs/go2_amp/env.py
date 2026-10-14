@@ -10,6 +10,9 @@ from isaacgym.torch_utils import (
 )
 
 from legged_gym.envs.random_dog.random_dog import Randomdog
+from legged_gym.envs.baseline.randomization import (
+    validate_training_randomization,
+)
 from rl.MGDP.amp.state import pack_amp_state, validate_go2_dofs
 from .commands import (
     amp_transition_mask,
@@ -20,10 +23,18 @@ from .commands import (
 from .terrain import TERRAIN_CLASS_IDS, next_curriculum_levels
 
 
+TASK_REWARD_NAMES = frozenset({
+    "tracking_lin_vel",
+    "tracking_ang_vel",
+    "feet_air_time",
+})
+
+
 class Go2AmpRandomDog(Randomdog):
     """Narrow MGDP subclass containing only the frozen formal-task behavior."""
 
     def __init__(self, cfg, sim_params, physics_engine, sim_device, headless):
+        validate_training_randomization(cfg.domain_rand)
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
         validate_go2_dofs(self.dof_names)
 
@@ -37,6 +48,8 @@ class Go2AmpRandomDog(Randomdog):
             self.num_envs, dtype=torch.float, device=self.device)
         self._base_reward = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device)
+        self._task_reward = torch.zeros_like(self._base_reward)
+        self._regularization_reward = torch.zeros_like(self._base_reward)
         self._termination_reward = torch.zeros_like(self._base_reward)
         self._amp_previous_state = torch.zeros(
             self.num_envs, 30, dtype=torch.float, device=self.device)
@@ -162,9 +175,15 @@ class Go2AmpRandomDog(Randomdog):
 
     def compute_reward(self):
         self._base_reward.zero_()
+        self._task_reward.zero_()
+        self._regularization_reward.zero_()
         for name, function in zip(self.reward_names, self.reward_functions):
             reward = function() * self.reward_scales[name]
             self._base_reward += reward
+            if name in TASK_REWARD_NAMES:
+                self._task_reward += reward
+            else:
+                self._regularization_reward += reward
             self.episode_sums[name] += reward
         if self.cfg.rewards.only_positive_rewards:
             self._base_reward[:] = torch.clamp(self._base_reward, min=0.0)
@@ -302,6 +321,7 @@ class Go2AmpRandomDog(Randomdog):
                 "terrain_levels": self.terrain_levels[env_ids].clone(),
                 "terrain_classes": self.env_class[env_ids].clone(),
                 "time_outs": self.time_out_buf[env_ids].clone(),
+                "episode_lengths": self.episode_length_buf[env_ids].clone(),
             }
         super().reset_idx(env_ids)
         if env_ids.numel() > 0:

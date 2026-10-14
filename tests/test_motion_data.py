@@ -73,6 +73,23 @@ class TestMotionData(unittest.TestCase):
             counts = np.bincount(a[:, 0].astype(int), minlength=4) / len(a)
             np.testing.assert_allclose(counts[1:], [0.1, 0.7, 0.2], atol=0.02)
 
+    def test_weighted_sampling_returns_group_indices_for_existing_d_forward(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_clip(root / "forward.txt", 11)
+            write_clip(root / "turn.txt", 22)
+            data = MotionDataset(
+                root,
+                {"forward": ["forward.txt"], "turn": ["turn.txt"]},
+                {"forward": 0.8, "turn": 0.2}, 0.02)
+            a, b, groups = data.sample_numpy_with_groups(
+                200, np.random.default_rng(13))
+            self.assertEqual(a.shape, (200, 30))
+            self.assertEqual(b.shape, (200, 30))
+            self.assertEqual(groups.shape, (200,))
+            np.testing.assert_array_equal(a[:, 0] == 11, groups == 0)
+            np.testing.assert_array_equal(a[:, 0] == 22, groups == 1)
+
     def test_motion_weight_is_applied_within_a_group(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -106,10 +106,13 @@ class Go2AmpCfg(RandomCfgStage1):
         push_interval_s = 15
         max_push_vel_xy = 1.0
         randomize_base_mass = False
+        randomize_link_mass = False
+        randomize_restitution = False
         randomize_com = False
         randomize_gains = False
         randomize_motor_strength = False
         randomize_motor_offset = False
+        randomize_lag_timesteps = False
 
     class noise(RandomCfgStage1.noise):
         add_noise = True

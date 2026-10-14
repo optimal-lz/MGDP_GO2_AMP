@@ -63,6 +63,23 @@ class TestGo2AmpTaskConfig(unittest.TestCase):
         self.assertEqual(domain["latency_range"], [0.0, 0.02])
         self.assertEqual(domain["push_interval_s"], 15)
         self.assertEqual(domain["max_push_vel_xy"], 1.0)
+        self.assertEqual(
+            {name: domain[name] for name in (
+                "randomize_friction", "randomize_action_latency",
+                "push_robots",
+            )},
+            {
+                "randomize_friction": True,
+                "randomize_action_latency": True,
+                "push_robots": True,
+            },
+        )
+        for name in (
+                "randomize_base_mass", "randomize_link_mass",
+                "randomize_restitution", "randomize_com",
+                "randomize_gains", "randomize_motor_strength",
+                "randomize_motor_offset", "randomize_lag_timesteps"):
+            self.assertIs(domain[name], False, name)
         scales = assignments(find_class(find_class(env_cfg, "rewards"), "scales"))
         expected = {"tracking_lin_vel": 1.5, "tracking_ang_vel": 0.5,
                     "feet_air_time": 0.5, "lin_vel_z": -1.0,

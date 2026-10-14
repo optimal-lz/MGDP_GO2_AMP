@@ -112,6 +112,8 @@ class PPO:
         mean_surrogate_loss = 0
         mean_vel_loss = 0
         mean_feet_loss = 0
+        mean_entropy = 0
+        mean_kl = 0
 
         mean_cnn_loss = 0
 
@@ -138,6 +140,7 @@ class PPO:
             mu_batch = self.actor_critic.action_mean
             sigma_batch = self.actor_critic.action_std
             entropy_batch = self.actor_critic.entropy
+            kl_mean = torch.zeros((), device=entropy_batch.device)
 
             # KL
             if self.desired_kl != None and self.schedule == 'adaptive':
@@ -204,6 +207,8 @@ class PPO:
 
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
+            mean_entropy += entropy_batch.mean().item()
+            mean_kl += kl_mean.item()
 
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
@@ -212,6 +217,8 @@ class PPO:
 
         mean_vel_loss /= num_updates
         mean_feet_loss /= num_updates
+        mean_entropy /= num_updates
+        mean_kl /= num_updates
 
 
         mean_cnn_loss  /= num_updates
@@ -221,6 +228,8 @@ class PPO:
         self.last_update_metrics = {
             "ppo/value_loss": mean_value_loss,
             "ppo/surrogate_loss": mean_surrogate_loss,
+            "ppo/entropy": mean_entropy,
+            "ppo/kl": mean_kl,
             "ppo/velocity_loss": mean_vel_loss,
             "ppo/feet_loss": mean_feet_loss,
             "ppo/learning_rate": self.learning_rate,

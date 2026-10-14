@@ -104,7 +104,8 @@ class TestComparisonOutputs(unittest.TestCase):
                 "shared_style_manifest", "normalizer", "discriminator",
                 "torch.inference_mode", "update_wm = False",
                 "add_noise = False", "push_robots = False",
-                "randomize_friction", "optimizer", "replay"):
+                "randomize_friction", "disable_evaluation_stochasticity",
+                "optimizer", "replay"):
             self.assertIn(text, source)
         self.assertNotIn(".update()", source)
         self.assertNotIn(".record(", source)

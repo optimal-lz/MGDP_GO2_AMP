@@ -3,6 +3,7 @@ from isaacgym import gymtorch, gymapi, gymutil
 import torch
 from legged_gym.envs import LeggedRobot
 from .legged_robot_config_baseline import LeggedRobotBaseCfg
+from .randomization import sample_motor_parameters
 from legged_gym.utils.terrain import Terrain
 from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi
 import cv2, os
@@ -920,14 +921,12 @@ class Legged_terrains(LeggedRobot):
                         print(f"PD gain of joint {name} were not defined, setting them to zero")
             self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
 
-        if self.cfg.control.control_type == "P_factors" or self.cfg.domain_rand.randomize_action_latency:
-            rand_motor_strength = np.random.uniform(self.cfg.domain_rand.added_motor_strength[0],
-                                                    self.cfg.domain_rand.added_motor_strength[1])
-
-            self.motor_strengths[env_id][:] = rand_motor_strength
-            rand_motor_offset = np.random.uniform(self.cfg.domain_rand.added_motor_offset[0],
-                                                  self.cfg.domain_rand.added_motor_offset[1])
-            self.motor_offsets[env_id][:] = rand_motor_offset
+        motor_strengths, motor_offsets = sample_motor_parameters(
+            self.cfg.domain_rand, self.num_actions)
+        self.motor_strengths[env_id][:] = to_torch(
+            motor_strengths, dtype=torch.float, device=self.device)
+        self.motor_offsets[env_id][:] = to_torch(
+            motor_offsets, dtype=torch.float, device=self.device)
 
 
         return props

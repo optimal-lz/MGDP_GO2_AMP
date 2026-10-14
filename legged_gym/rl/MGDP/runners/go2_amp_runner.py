@@ -12,10 +12,14 @@ from torch.utils.tensorboard import SummaryWriter
 from rl.MGDP.amp.motions import MotionDataset
 from rl.MGDP.amp.session import AMPSession
 from rl.MGDP.amp.transition import select_next_amp_state
+from legged_gym.envs.go2_amp.terrain import TERRAIN_NAMES
 
 from .go2_amp_checkpoint import (
     CheckpointCompatibility,
     PairedCheckpointManager,
+    restore_ppo_learning_rate,
+    restore_terrain_state,
+    validate_terrain_state,
 )
 from .go2_amp_logging import IterationMetrics
 from .policy_runner import MGDPPolicyRunner
@@ -80,11 +84,105 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             if log_dir is not None else None)
         self.current_learning_iteration = self.current_learning_iteration_init
         self.iteration_metrics = IterationMetrics(
-            self.writer, self.mode, self.current_learning_iteration_init - 1)
+            self.writer, self.mode, self.current_learning_iteration_init - 1,
+            terrain_names=TERRAIN_NAMES)
 
     @staticmethod
     def _mean(total, count):
         return total / max(count, 1)
+
+    def _new_rollout_metrics(self):
+        scalar_names = (
+            "task_sum", "regularization_sum", "amp_sum", "total_sum",
+            "vx_error_sum", "yaw_error_sum", "episode_length_sum",
+            "episode_count", "base_failure_count", "valid_amp_count",
+        )
+        metrics = {
+            name: torch.zeros((), device=self.device) for name in scalar_names
+        }
+        terrain_count = len(TERRAIN_NAMES)
+        for name in (
+                "terrain_transition_count", "terrain_level_sum",
+                "terrain_stuck_sum", "terrain_episode_count",
+                "terrain_completion_sum", "terrain_base_failure_sum"):
+            metrics[name] = torch.zeros(terrain_count, device=self.device)
+        metrics["transition_count"] = 0
+        return metrics
+
+    def _accumulate_rollout_metrics(self, metrics, commands, terrain_classes,
+                                    terrain_levels, dones, infos,
+                                    amp_transition_mask, amp_contribution,
+                                    rewards):
+        metrics["task_sum"] += self.env._task_reward.detach().sum()
+        metrics["regularization_sum"] += (
+            self.env._regularization_reward.detach().sum())
+        metrics["amp_sum"] += amp_contribution.detach().sum()
+        metrics["total_sum"] += rewards.detach().sum()
+        metrics["valid_amp_count"] += amp_transition_mask.detach().sum()
+        metrics["transition_count"] += rewards.numel()
+
+        vx = self.env.base_lin_vel[:, 0].detach().clone()
+        yaw = self.env.base_ang_vel[:, 2].detach().clone()
+        terminal = infos.get("terminal_diagnostics")
+        if terminal is not None:
+            terminal_ids = terminal["env_ids"].long()
+            vx[terminal_ids] = terminal["base_lin_vel"][:, 0]
+            yaw[terminal_ids] = terminal["base_ang_vel"][:, 2]
+            episode_count = terminal_ids.numel()
+            metrics["episode_count"] += episode_count
+            metrics["episode_length_sum"] += (
+                terminal["episode_lengths"].float().sum() * self.env.dt)
+            failures = ~terminal["time_outs"].bool()
+            metrics["base_failure_count"] += failures.float().sum()
+            terminal_classes = terminal["terrain_classes"].long()
+            ones = torch.ones(
+                episode_count, device=self.device, dtype=torch.float)
+            metrics["terrain_episode_count"].scatter_add_(
+                0, terminal_classes, ones)
+            metrics["terrain_completion_sum"].scatter_add_(
+                0, terminal_classes, terminal["time_outs"].float())
+            metrics["terrain_base_failure_sum"].scatter_add_(
+                0, terminal_classes, failures.float())
+
+        metrics["vx_error_sum"] += torch.abs(
+            vx - commands[:, 0]).sum()
+        metrics["yaw_error_sum"] += torch.abs(
+            yaw - commands[:, 1]).sum()
+        ones = torch.ones_like(terrain_levels, dtype=torch.float)
+        metrics["terrain_transition_count"].scatter_add_(
+            0, terrain_classes, ones)
+        metrics["terrain_level_sum"].scatter_add_(
+            0, terrain_classes, terrain_levels.float())
+        stuck = ((commands[:, 0] > self.env.cfg.commands.vx_deadband)
+                 & (vx < 0.1)).float()
+        metrics["terrain_stuck_sum"].scatter_add_(
+            0, terrain_classes, stuck)
+
+    @staticmethod
+    def _tensor_mean(total, count):
+        return total / torch.clamp(count, min=1.0)
+
+    def _terrain_detail_metrics(self, metrics):
+        detail = {}
+        level = self._tensor_mean(
+            metrics["terrain_level_sum"],
+            metrics["terrain_transition_count"])
+        stuck = self._tensor_mean(
+            metrics["terrain_stuck_sum"],
+            metrics["terrain_transition_count"])
+        completion = self._tensor_mean(
+            metrics["terrain_completion_sum"],
+            metrics["terrain_episode_count"])
+        failure = self._tensor_mean(
+            metrics["terrain_base_failure_sum"],
+            metrics["terrain_episode_count"])
+        for index, name in enumerate(TERRAIN_NAMES):
+            prefix = "terrain/{}/".format(name)
+            detail[prefix + "mean_level"] = level[index]
+            detail[prefix + "completion"] = completion[index]
+            detail[prefix + "base_contact_failure"] = failure[index]
+            detail[prefix + "stuck"] = stuck[index]
+        return detail
 
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         if init_at_random_ep_len:
@@ -100,13 +198,14 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         reward_history = deque(maxlen=100)
 
         for iteration in range(start_iteration, end_iteration):
+            iteration_start = time.time()
             collection_start = time.time()
-            task_sum = torch.zeros((), device=self.device)
-            amp_sum = torch.zeros((), device=self.device)
-            total_sum = torch.zeros((), device=self.device)
-            transition_count = 0
+            rollout_metrics = self._new_rollout_metrics()
 
             for _ in range(self.num_steps_per_env):
+                commands_before = self.env.commands[:, (0, 2)].detach().clone()
+                terrain_classes_before = self.env.env_class.long().clone()
+                terrain_levels_before = self.env.terrain_levels.clone()
                 if self.amp is not None:
                     amp_before = self.env.get_amp_observations().clone()
                 with torch.inference_mode():
@@ -118,13 +217,13 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                 dones = dones.to(self.device)
 
                 amp_contribution = torch.zeros_like(self.env._base_reward)
+                amp_transition_mask = infos["amp_transition_mask"]
                 if self.amp is not None:
                     amp_after = select_next_amp_state(
                         self.env.get_amp_observations().clone(),
                         dones,
                         infos.get("terminal_amp_states"),
                     )
-                    amp_transition_mask = infos["amp_transition_mask"]
                     amp_contribution = self.amp.reward(
                         amp_before,
                         amp_after,
@@ -139,10 +238,11 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                 self.alg.process_env_step(
                     rewards, dones, next_obs=obs_dict["obs"], infos=infos)
 
-                task_sum += self.env._base_reward.detach().sum()
-                amp_sum += amp_contribution.detach().sum()
-                total_sum += rewards.detach().sum()
-                transition_count += rewards.numel()
+                self._accumulate_rollout_metrics(
+                    rollout_metrics, commands_before,
+                    terrain_classes_before, terrain_levels_before,
+                    dones, infos, amp_transition_mask,
+                    amp_contribution, rewards)
                 reward_history.append(rewards.detach().mean())
 
             collection_time = time.time() - collection_start
@@ -151,6 +251,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             # updates, GAE, PPO, then twenty discriminator updates.
             wm_rollout_steps = int(
                 getattr(self.env.cfg.camera, "wm_rollout_steps", 0))
+            wm_start = time.time()
             if getattr(self.env, "use_world_model", False):
                 for _ in range(wm_rollout_steps):
                     self.env.update_world_model(
@@ -158,38 +259,88 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                             self.env, "latest_world_model_batch", None),
                         num_updates=1,
                     )
+            wm_time = time.time() - wm_start
 
+            ppo_start = time.time()
             with torch.inference_mode():
                 self.alg.compute_returns(obs_dict)
-            learning_start = time.time()
             self.alg.update()
+            ppo_time = time.time() - ppo_start
+            discriminator_start = time.time()
             amp_update_metrics = (
                 self.amp.update() if self.amp is not None else {})
-            learning_time = time.time() - learning_start
+            discriminator_time = time.time() - discriminator_start
+            iteration_time = time.time() - iteration_start
+
+            transition_count = rollout_metrics["transition_count"]
+            episode_count = rollout_metrics["episode_count"]
 
             core = {
-                "reward/task": self._mean(task_sum, transition_count),
+                "reward/task": self._mean(
+                    rollout_metrics["task_sum"], transition_count),
+                "reward/regularization": self._mean(
+                    rollout_metrics["regularization_sum"], transition_count),
                 "reward/amp_contribution": self._mean(
-                    amp_sum, transition_count),
-                "reward/total": self._mean(total_sum, transition_count),
-                "performance/collection_seconds": collection_time,
-                "performance/learning_seconds": learning_time,
+                    rollout_metrics["amp_sum"], transition_count),
+                "reward/total": self._mean(
+                    rollout_metrics["total_sum"], transition_count),
+                "tracking/vx_error": self._mean(
+                    rollout_metrics["vx_error_sum"], transition_count),
+                "tracking/yaw_error": self._mean(
+                    rollout_metrics["yaw_error_sum"], transition_count),
+                "episode/length": self._tensor_mean(
+                    rollout_metrics["episode_length_sum"], episode_count),
+                "episode/base_contact_failure": self._tensor_mean(
+                    rollout_metrics["base_failure_count"], episode_count),
+                "terrain/mean_level": self._tensor_mean(
+                    rollout_metrics["terrain_level_sum"].sum(),
+                    rollout_metrics["terrain_transition_count"].sum()),
+                "wm/total_loss": getattr(self.env, "total_wm_loss", 0.0),
+                "wm/depth_loss": getattr(self.env, "visual_mse_loss", 0.0),
+                "wm/height_loss": getattr(self.env, "height_mse_loss", 0.0),
+                "wm/contrastive_loss": getattr(
+                    self.env, "contrastive_loss", 0.0),
+                "ppo/surrogate_loss": self.alg.last_update_metrics[
+                    "ppo/surrogate_loss"],
+                "ppo/value_loss": self.alg.last_update_metrics[
+                    "ppo/value_loss"],
+                "ppo/entropy": self.alg.last_update_metrics["ppo/entropy"],
+                "ppo/kl": self.alg.last_update_metrics["ppo/kl"],
+                "policy/action_std": self.alg.actor_critic.std.mean(),
+                "performance/iteration_seconds": iteration_time,
             }
-            core.update(self.alg.last_update_metrics)
             if self.amp is not None:
                 core.update({
-                    f"amp/{key}": value
-                    for key, value in amp_update_metrics.items()
+                    "amp/policy_logit": amp_update_metrics["policy_logit"],
+                    "amp/expert_logit": amp_update_metrics["expert_logit"],
+                    "amp/discriminator_loss": amp_update_metrics[
+                        "discriminator_loss"],
+                    "amp/gradient_penalty": amp_update_metrics[
+                        "gradient_penalty"],
+                    "amp/valid_transition_count": rollout_metrics[
+                        "valid_amp_count"],
+                    "amp/replay_fill": (
+                        self.amp.replay.size / self.amp.replay.capacity),
                 })
-            detail = {
-                "terrain/mean_level": self.env.terrain_levels.float().mean(),
-                "policy/action_std": self.alg.actor_critic.std.mean(),
-            }
+            detail = self._terrain_detail_metrics(rollout_metrics)
+            detail.update({
+                "timing/simulation_seconds": collection_time,
+                "timing/wm_seconds": wm_time,
+                "timing/ppo_seconds": ppo_time,
+            })
+            if self.amp is not None:
+                detail.update({
+                    "timing/discriminator_seconds": discriminator_time,
+                    "amp/expert_forward_logit": amp_update_metrics[
+                        "expert_forward_logit"],
+                    "amp/expert_turn_logit": amp_update_metrics[
+                        "expert_turn_logit"],
+                })
             self.iteration_metrics.write(iteration, core, detail)
             completed_iteration = iteration + 1
             self.current_learning_iteration = completed_iteration
             self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
-            self.tot_time += collection_time + learning_time
+            self.tot_time += iteration_time
             if (self.checkpoints is not None
                     and completed_iteration % self.save_interval == 0):
                 self.save_pair(completed_iteration)
@@ -223,6 +374,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             "mode": self.mode,
             "actor_state_dict": self.alg.actor_critic.state_dict(),
             "optimizer_state_dict": self.alg.optimizer.state_dict(),
+            "ppo_learning_rate": float(self.alg.learning_rate),
             "iteration": iteration,
             "terrain_levels": self.env.terrain_levels.clone(),
             "rng": self._rng_state_dict(),
@@ -231,11 +383,10 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             state["amp_state"] = self.amp.state_dict()
         return state
 
-    @staticmethod
-    def _validate_policy_state(state, mode):
+    def _validate_policy_state(self, state, mode):
         required = {
             "mode", "actor_state_dict", "optimizer_state_dict",
-            "iteration", "terrain_levels", "rng",
+            "ppo_learning_rate", "iteration", "terrain_levels", "rng",
         }
         missing = required.difference(state)
         if missing:
@@ -243,6 +394,9 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                 f"policy checkpoint missing fields: {sorted(missing)}")
         if state.get("mode") != mode:
             raise ValueError("checkpoint runner mode mismatch")
+        learning_rate = float(state["ppo_learning_rate"])
+        if not np.isfinite(learning_rate) or learning_rate <= 0.0:
+            raise ValueError("checkpoint PPO learning rate is invalid")
         if mode == "amp" and "amp_state" not in state:
             raise ValueError("AMP checkpoint state missing")
         if mode == "no_amp" and "amp_state" in state:
@@ -250,14 +404,16 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         rng_fields = {"python", "numpy", "torch", "torch_cuda"}
         if set(state["rng"]) != rng_fields:
             raise ValueError("policy checkpoint RNG fields mismatch")
+        validate_terrain_state(self.env, state["terrain_levels"])
 
     def load_state_dict(self, state):
         self._validate_policy_state(state, self.mode)
         self.alg.actor_critic.load_state_dict(state["actor_state_dict"])
         self.alg.optimizer.load_state_dict(state["optimizer_state_dict"])
+        restore_ppo_learning_rate(self.alg, state["ppo_learning_rate"])
         self.current_learning_iteration = int(state["iteration"])
         self.current_learning_iteration_init = self.current_learning_iteration
-        self.env.terrain_levels.copy_(state["terrain_levels"])
+        restore_terrain_state(self.env, state["terrain_levels"])
         if self.amp is not None:
             if "amp_state" not in state:
                 raise ValueError("AMP checkpoint state missing")

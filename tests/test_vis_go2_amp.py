@@ -27,6 +27,7 @@ class TestGo2AmpViewer(unittest.TestCase):
         self.assertIn("env_cfg.noise.add_noise = False", self.source)
         self.assertIn("env_cfg.domain_rand.push_robots = False", self.source)
         self.assertIn("env_cfg.camera.update_wm = False", self.source)
+        self.assertIn("disable_evaluation_stochasticity", self.source)
         self.assertIn("torch.inference_mode", self.source)
         self.assertIn("runner.load_pair", self.source)
         self.assertIn("restore_training_state=False", self.source)

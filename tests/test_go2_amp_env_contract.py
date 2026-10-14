@@ -68,6 +68,14 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
         self.assertNotIn("stuck", termination.lower())
         self.assertIn("_reward_stuck", self.methods)
 
+    def test_reward_statistics_split_task_from_regularization_without_reordering(self):
+        compute = self.methods["compute_reward"]
+        self.assertIn("TASK_REWARD_NAMES", self.source)
+        self.assertIn("self._task_reward", compute)
+        self.assertIn("self._regularization_reward", compute)
+        self.assertIn("torch.clamp(self._base_reward, min=0.0)", compute)
+        self.assertIn("episode_lengths", self.methods["reset_idx"])
+
 
 if __name__ == "__main__":
     unittest.main()

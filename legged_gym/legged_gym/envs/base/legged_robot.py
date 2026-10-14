@@ -435,7 +435,7 @@ class LeggedRobot(BaseTask):
 
         if control_type == "P":
             self.joint_pos_target = actions_scaled + self.default_dof_pos
-            if self.cfg.domain_rand.randomize_action_latency:
+            if self.cfg.domain_rand.randomize_motor_offset:
                 torques = (self.p_gains * (self.joint_pos_target - self.dof_pos + self.motor_offsets)
                            - self.d_gains * self.dof_vel)
             else:
@@ -444,7 +444,8 @@ class LeggedRobot(BaseTask):
 
 
             # scale the output
-            torques = torques * self.motor_strengths
+            if self.cfg.domain_rand.randomize_motor_strength:
+                torques = torques * self.motor_strengths
 
 
 

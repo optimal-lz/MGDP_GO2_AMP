@@ -158,16 +158,25 @@ class AMPSession:
                 "amp_updates": 0,
                 "amp_update_count": self.update_count,
                 "replay_size": 0,
+                "discriminator_loss": 0.0,
+                "gradient_penalty": 0.0,
+                "policy_logit": 0.0,
+                "expert_logit": 0.0,
+                "expert_forward_logit": 0.0,
+                "expert_turn_logit": 0.0,
             }
         losses = []
         penalties = []
         policy_outputs = []
         expert_outputs = []
+        expert_group_outputs = {
+            name: [] for name in self.dataset.group_names}
         batch_size = int(self.config["amp_batch_size"])
         coefficient = float(self.config["amp_gradient_penalty_coef"])
         for _ in range(updates_per_iter):
             policy_state, policy_next = self.replay.sample(batch_size)
-            expert_state, expert_next = self.dataset.sample(batch_size, self.device)
+            expert_state, expert_next, expert_groups = (
+                self.dataset.sample_with_groups(batch_size, self.device))
             self.normalizer.update(torch.cat((
                 policy_state, policy_next, expert_state, expert_next,
             ), dim=0))
@@ -189,6 +198,16 @@ class AMPSession:
             penalties.append(gradient_penalty.detach())
             policy_outputs.append(policy_output.detach())
             expert_outputs.append(expert_output.detach())
+            for group_index, group_name in enumerate(
+                    self.dataset.group_names):
+                selected = expert_output[expert_groups == group_index]
+                if selected.numel() > 0:
+                    expert_group_outputs[group_name].append(selected.detach())
+        group_means = {}
+        for group_name in ("forward", "turn"):
+            values = expert_group_outputs.get(group_name, [])
+            group_means["expert_{}_logit".format(group_name)] = (
+                torch.cat(values).mean().item() if values else 0.0)
         return {
             "amp_updates": updates_per_iter,
             "amp_update_count": self.update_count,
@@ -197,6 +216,7 @@ class AMPSession:
             "gradient_penalty": torch.stack(penalties).mean().item(),
             "policy_logit": torch.cat(policy_outputs).mean().item(),
             "expert_logit": torch.cat(expert_outputs).mean().item(),
+            **group_means,
         }
 
     def _compatibility(self):

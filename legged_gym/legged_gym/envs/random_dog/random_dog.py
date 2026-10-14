@@ -2,7 +2,9 @@ from legged_gym.envs import LeggedRobot
 from legged_gym.envs import Legged_terrains
 from legged_gym.envs import Legged_rewards
 from legged_gym.envs import Legged_camera, CameraMixin
+from legged_gym.envs.baseline.randomization import camera_mount_ranges
 from .random_dog_config_stage1 import RandomCfgStage1, RandomCfgPPOStage1
+import copy
 import cv2, os
 import numpy as np
 import torch
@@ -154,7 +156,15 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
             cfg = WarpConfig()
             if self.cfg.camera.use_camera == True:
                 cfg.camera.pattern = Camera.pattern
-                cfg.camera.offset = Camera.offset
+                cfg.camera.offset = copy.deepcopy(Camera.offset)
+                translation, rotation = camera_mount_ranges(
+                    getattr(self.cfg.camera, "mount_translation_jitter", 0.0),
+                    getattr(self.cfg.camera, "mount_pitch_jitter_deg", 0.0),
+                )
+                cfg.camera.offset.trans_rand.min = translation[0]
+                cfg.camera.offset.trans_rand.max = translation[1]
+                cfg.camera.offset.rot_rand.min = rotation[0]
+                cfg.camera.offset.rot_rand.max = rotation[1]
                 cfg.camera.process = Camera.process
                 print('camera_config', Camera())
             if self.cfg.camera.use_lidar == True:
@@ -1175,7 +1185,7 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
         if control_type == "P":
             self.joint_pos_target = actions_scaled + self.default_dof_pos
 
-            if self.cfg.domain_rand.randomize_action_latency:
+            if self.cfg.domain_rand.randomize_motor_offset:
                 self.joint_pos_target = self.joint_pos_target + self.motor_offsets
 
                 # self.joint_pos_target  = torch.clip(self.joint_pos_target , self.dof_pos_limits[:, 0], self.dof_pos_limits[:, 1])
@@ -1187,7 +1197,8 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                            - self.d_gains * self.dof_vel)
 
             # scale the output
-            torques = torques * self.motor_strengths
+            if self.cfg.domain_rand.randomize_motor_strength:
+                torques = torques * self.motor_strengths
         elif control_type == "P_factors":
             if self.cfg.domain_rand.randomize_lag_timesteps:
                 prev_action = self.lag_buffer[:, 1:, :].clone()

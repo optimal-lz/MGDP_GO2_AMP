@@ -30,7 +30,7 @@ def parse_args():
          "required": True},
         {"name": "--target_iteration", "type": int, "required": True},
         {"name": "--resume_from", "type": str, "default": None},
-        {"name": "--amp_reward_coef", "type": float, "default": None},
+        {"name": "--amp_coef", "type": float, "default": None},
         {"name": "--seed", "type": int, "default": 1},
         {"name": "--num_envs", "type": int, "default": 4096},
         {"name": "--rl_device", "type": str, "default": "cuda:0"},
@@ -73,11 +73,11 @@ def _resolve_resume_manifest(resume_from, run_dir):
 
 def main():
     args = parse_args()
-    coefficient = args.amp_reward_coef
+    coefficient = args.amp_coef
     if args.mode == "amp" and coefficient is None:
         coefficient = 0.01
     if args.mode == "no_amp" and coefficient is not None:
-        raise ValueError("--amp_reward_coef is valid only with --mode amp")
+        raise ValueError("--amp_coef is valid only with --mode amp")
     if args.target_iteration <= 0:
         raise ValueError("--target_iteration must be positive")
 

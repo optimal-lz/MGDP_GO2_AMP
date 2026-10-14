@@ -41,6 +41,9 @@ class TestSingleAmpSource(unittest.TestCase):
         self.assertIn("self.config['amp_reward_coef'] * raw", methods["reward"])
         self.assertIn("self.replay.insert(state[mask], next_state[mask])", methods["record"])
         self.assertIn("amp_updates_per_iter", methods["update"])
+        self.assertIn("sample_with_groups", methods["update"])
+        self.assertIn("expert_forward_logit", methods["update"])
+        self.assertIn("expert_turn_logit", methods["update"])
         for obsolete in ("stage", "anchor", "course", "stratified", "ramp", "policy_only"):
             self.assertNotIn(obsolete, source.lower())
 
@@ -74,6 +77,7 @@ class TestSingleAmpTensor(unittest.TestCase):
     class Dataset:
         def __init__(self, seed=91):
             self.rng = np.random.default_rng(seed)
+            self.group_names = ["forward", "turn"]
 
         def sample(self, count, device):
             import torch
@@ -81,6 +85,12 @@ class TestSingleAmpTensor(unittest.TestCase):
             second = self.rng.normal(size=(count, 30)).astype(np.float32)
             return (torch.as_tensor(first, device=device),
                     torch.as_tensor(second, device=device))
+
+        def sample_with_groups(self, count, device):
+            import torch
+            first, second = self.sample(count, device)
+            groups = torch.arange(count, device=device) % 2
+            return first, second, groups
 
     def test_construction_preserves_global_numpy_and_torch_rng(self):
         import torch
