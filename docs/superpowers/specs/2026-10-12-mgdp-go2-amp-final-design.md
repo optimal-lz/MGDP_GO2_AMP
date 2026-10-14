@@ -1,7 +1,8 @@
 # MGDP Go2 AMP 最终设计规格
 
 日期：2026-10-12
-状态：已冻结，等待实施计划
+初版基线：2026-10-14，Git `8d653e2`
+状态：V1 初版已实现并完成本地审查；RTX 4090 / Isaac Gym smoke 待执行
 适用仓库：`D:\New Beginning Help\LZAMP\MGDP_GO2_AMP`
 
 ## 1. 文档地位与目标
@@ -204,7 +205,7 @@ Critic 不接入 WM token、D 输出、摩擦、延迟、接触、terrain id/lev
 | `cheat` | -1 | 结构化直行地形且 `abs(heading_error)>1` |
 | `stuck` | -1 | `vx>0.2` 且实际基座前向进度 `<0.1`；不终止 |
 
-不加入 trot/bound/pace 显式步态模板。启用 `only_positive_rewards=true`，但只对 task+regularization+safety 合计截断；AMP 在其后加入，termination reward 最后加入。
+不加入 trot/bound/pace 显式步态模板。启用 `only_positive_rewards=true`，但只对 task+regularization+safety 合计截断；AMP 在其后加入，termination reward 最后加入。正式 Go2 任务显式设置 `terrain_adaptive_reward=false`，不得沿用旧 MGDP 根据旧 `env_class` 编号缩放 `collision`、`lin_vel_z` 或 `orientation` 的行为；只有上表明确写出的条件奖励可以按命令、地形或难度 gating。
 
 ## 11. 终止与 reset
 
@@ -228,6 +229,8 @@ Domain randomization 从训练开始启用：
 - 每 15 s push，最大 xy velocity 1
 
 首版不随机 restitution、base/link mass、COM、PD gains、motor strength、motor/joint offsets；无随机化课程或地形例外。
+
+正式任务采用显式随机化允许列表：只允许 friction、action latency 与 push。任何继承或后续新增且默认开启的其他 `randomize_*` 开关必须在环境构造时被拒绝，不能静默进入训练。action latency 只负责在控制 decimation 内选择延迟动作，不得顺带生成或应用 motor strength、motor offset。
 
 Proprio noise：dof_pos 0.01、dof_vel 1.5、lin_vel 0.1（只给需要的训练支路，不能泄露真实线速度给 Actor）、ang_vel 0.2、projected gravity 0.05。
 
@@ -293,7 +296,7 @@ eval/
 
 `config.json` 保存完整生效配置；`run.json` 保存命令、Git commit、Python/PyTorch/CUDA/Isaac Gym 版本、实际专家文件。
 
-policy checkpoint 包含 Actor/Critic、PPO optimizer、terrain levels、iteration、RNG；AMP 模式另含 D、D optimizer、AMP normalizer/replay。WM checkpoint 含 WM 网络、optimizer、depth stats、iteration。manifest 记录文件名、配置哈希、mode、coef、seed、env count、iteration 与一致性检查；`last.json` 只指向最近完整 pair，不复制大型 `last.pt`。
+policy checkpoint 包含 Actor/Critic、PPO optimizer、PPO 当前自适应 learning rate、terrain levels、iteration、RNG；AMP 模式另含 D、D optimizer、AMP normalizer/replay。恢复 terrain levels 时必须同步派生的 `env_origins` 与 `env_class`。WM checkpoint 含 WM 网络、optimizer、depth stats、iteration。manifest 记录文件名、配置哈希、mode、coef、seed、env count、iteration 与一致性检查；`last.json` 只指向最近完整 pair，不复制大型 `last.pt`。
 
 恢复必须严格配对 policy、WM、manifest。mode/coef/seed/env count/关键配置不匹配则拒绝。不支持旧 checkpoint 正式全量续训，也不把 policy-only warm start 纳入正式流程。
 
@@ -304,7 +307,7 @@ policy checkpoint 包含 Actor/Critic、PPO optimizer、terrain levels、iterati
 `vis_go2_amp.py` 加载配对 checkpoint，支持 terrain、level、vx、yaw、env id、follow camera。默认直接打开 Isaac Gym Viewer：
 
 - deterministic Actor，所有网络冻结
-- noise/domain randomization/push 关闭
+- proprio/depth/camera-mount/domain randomization/push 全部关闭；禁用深度噪声时不再生成无效随机 tensor
 - 固定 seed、少量 env
 - live depth 与 WM height panels
 - episode 结束打印 command/actual velocity、terrain/level、AMP reward、failure reason
@@ -372,9 +375,9 @@ CPU/static tests 覆盖：
 - mode/coef/seed/env/config mismatch
 - 统一 CLI
 
-断言旧 Stage1/Stage2、ramp、anchor、double replay 的测试必须删除或重写。
+不得用测试维持旧 Stage1/Stage2 的运行结果兼容，也不得恢复 ramp、anchor 或 double replay。旧任务注册暂时保留，但不属于 V1 正式入口或 GPU 验收范围；后续只有在确认不影响 `go2_amp` 所需 MGDP 感知依赖后才清理。
 
-GPU smoke 验证有限数值、固定更新顺序、noAMP 不创建 AMP 路径、pair save/restore 后 iteration/terrain/optimizer/normalizer/replay/RNG 连续，以及 4096 env 在 RTX 4090 24 GB 上可运行；若 OOM 再按实测峰值诊断。
+本地 CPU/static 基线为 93 项测试通过、10 项 PyTorch/Isaac 训练机测试按预期跳过，`compileall` 与 `git diff --check` 通过。GPU smoke 仍需验证有限数值、固定更新顺序、noAMP 不创建 AMP 路径、pair save/restore 后 iteration/terrain/optimizer/normalizer/replay/RNG 连续，以及 4096 env 在 RTX 4090 24 GB 上可运行；若 OOM 再按实测峰值诊断。
 
 性能不写成单元测试阈值。训练效果由 Viewer、可选视频、WM PNG、comparison CSV/PNG、轻量 TensorBoard 综合判断；不重复专家回放。
 
@@ -390,4 +393,4 @@ GPU smoke 验证有限数值、固定更新顺序、noAMP 不创建 AMP 路径�
 
 首版明确不做：低矮匍匐地形、站立/后退/横向专家、多个/条件 D、RSI、显式步态模板、分阶段训练、自动调参/准入、训练时自动视频/报告、无关随机化与额外终止条件。
 
-本文确认后，下一步只编写逐文件实施计划；实施计划获确认前不修改训练代码。
+本文是 V1 行为的规范来源；实际落地状态、审查修正和未完成的训练机验证见 `docs/MGDP_GO2_AMP_V1_INITIAL_BASELINE.md`。实施计划保留为历史过程，若与本文或 V1 基线记录冲突，以本文的行为要求和 V1 基线记录的实际状态为准。

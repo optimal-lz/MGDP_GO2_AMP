@@ -2,7 +2,13 @@
 
 本项目是在 Legged Gym、RSL-RL/MGDP 现有框架上进行的进阶修改：保留 MGDP 的前下视深度感知、对比学习 World Model 和 PPO 运动控制架构，引入 WMP 风格的单判别器 AMP，把已有 Go2 专家动作作为自然步态先验。正式任务只有一个：`go2_amp`。
 
-当前唯一有效的总体规格是 [`docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md`](docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md)。更早的 Stage、anchor、AMP ramp 等文档只保留为历史记录，不是正式训练协议。
+文档入口：
+
+- 当前唯一有效的行为规格：[`docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md`](docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md)
+- V1 实际交付、验证和待办基线：[`docs/MGDP_GO2_AMP_V1_INITIAL_BASELINE.md`](docs/MGDP_GO2_AMP_V1_INITIAL_BASELINE.md)
+- 历史实施过程：[`docs/superpowers/plans/2026-10-12-mgdp-go2-amp-implementation.md`](docs/superpowers/plans/2026-10-12-mgdp-go2-amp-implementation.md)
+
+更早的 Stage、anchor、AMP ramp 等文档只保留为历史记录，不是正式训练协议。
 
 ## 正式设计摘要
 

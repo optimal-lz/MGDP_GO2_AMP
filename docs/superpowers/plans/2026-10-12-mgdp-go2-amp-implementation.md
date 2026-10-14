@@ -1,5 +1,7 @@
 # MGDP Go2 AMP Implementation Plan
 
+> **Status (2026-10-14):** Historical implementation plan. The local implementation portions of Tasks 1-12 and the post-implementation remediation are complete; training-host validation remains deferred as recorded below. This file preserves how the implementation was carried out; the normative behavior is defined by the final design spec, and the delivered state is recorded in `docs/MGDP_GO2_AMP_V1_INITIAL_BASELINE.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the single-stage `go2_amp` task that preserves MGDP perception/PPO, adds the frozen WMP-style AMP regularizer, and provides reproducible AMP/noAMP training, restore, visualization, and comparison.
@@ -565,3 +567,15 @@ git commit -m "docs: document the formal Go2 AMP workflow"
 - [ ] **Step 9: Final review**
 
 Map every approved spec section to implementation/tests/manifests. Confirm `git status --short` has no generated or unexpected files.
+
+## Post-implementation review and remediation
+
+The plan above remains a historical execution record. The following later findings refine the delivered V1 behavior without rewriting that history:
+
+- `8104e96` — enforced the formal randomization allowlist; separated action latency from motor strength/offset; connected camera-mount jitter; made Viewer/comparison stochasticity fully disabled; restored PPO adaptive learning rate and derived terrain state; completed the frozen TensorBoard schema; aligned the formal CLI to `--amp_coef`.
+- `8d653e2` — explicitly disabled inherited `terrain_adaptive_reward` for `go2_amp`, preventing legacy MGDP terrain ids from scaling the new task's `collision`, `lin_vel_z`, and `orientation` terms.
+- Local verification at this baseline: 93 tests passed, 10 PyTorch/Isaac training-host tests skipped as declared; `compileall` and `git diff --check` passed.
+- Deferred verification: 64-env AMP/noAMP smoke, paired resume, Viewer checks, and the 4096-env RTX 4090 load test still require the Linux CUDA/Isaac Gym host.
+- The `random_dog_stage1/2` registrations remain temporarily present. They are not a correctness or compatibility target for this new project and may be removed later if they interfere with GPU training. The required MGDP perception, World Model, history encoder, PPO, and shared environment primitives remain dependencies of `go2_amp`.
+
+When this historical plan conflicts with later wording, precedence is: final design specification for intended behavior, V1 initial baseline for delivered/verified state, then this implementation plan for execution history.
