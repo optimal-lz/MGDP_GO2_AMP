@@ -127,6 +127,7 @@ class Go2AmpCfg(RandomCfgStage1):
 
     class rewards(RandomCfgStage1.rewards):
         only_positive_rewards = True
+        terrain_adaptive_reward = False
         amp_air_time_cap = 0.75
 
         class scales(RandomCfgStage1.rewards.scales):
