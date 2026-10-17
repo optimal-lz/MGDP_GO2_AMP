@@ -41,6 +41,18 @@ def formal_domain(**overrides):
 
 
 class TestGo2AmpRandomization(unittest.TestCase):
+    def test_push_period_uses_positive_policy_step_interval(self):
+        module = load_module()
+        self.assertFalse(module.push_is_due(1, 750))
+        self.assertFalse(module.push_is_due(15, 750))
+        self.assertTrue(module.push_is_due(750, 750))
+        self.assertTrue(module.push_is_due(1500, 750))
+        self.assertFalse(module.push_is_due(0, 750))
+        for invalid in (0, -1, 1.5):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    module.push_is_due(750, invalid)
+
     def test_training_allowlist_rejects_every_unapproved_randomization(self):
         module = load_module()
         module.validate_training_randomization(formal_domain())
@@ -110,6 +122,9 @@ class TestGo2AmpRandomization(unittest.TestCase):
         terrain_source = TERRAINS.read_text(encoding="utf-8")
         dog_source = RANDOM_DOG.read_text(encoding="utf-8")
         self.assertIn("sample_motor_parameters", terrain_source)
+        self.assertIn("push_is_due", terrain_source)
+        self.assertIn("self.cfg.domain_rand.push_interval", terrain_source)
+        self.assertNotIn("common_step_counter % self.cfg.domain_rand.push_interval_s", terrain_source)
         self.assertNotIn(
             'control_type == "P_factors" or self.cfg.domain_rand.randomize_action_latency',
             terrain_source,

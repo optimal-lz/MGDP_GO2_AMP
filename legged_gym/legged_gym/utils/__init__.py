@@ -33,6 +33,7 @@ from .task_registry import task_registry
 from .logger import Logger
 from .math import *
 from .terrain import Terrain
-from .go2_amp_run import (format_run_name, prepare_run_directory,
+from .go2_amp_run import (format_run_name, normalize_effective_config,
+                          prepare_run_directory,
                           remaining_iterations, write_run_metadata)
 # from .math_utils import *

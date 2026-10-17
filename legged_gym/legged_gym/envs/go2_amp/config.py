@@ -116,6 +116,9 @@ class Go2AmpCfg(RandomCfgStage1):
 
     class noise(RandomCfgStage1.noise):
         add_noise = True
+        # Critic privilege and WM height supervision must remain clean.
+        add_height_noise = False
+        add_privileged_noise = False
         noise_level = 1.0
 
         class noise_scales(RandomCfgStage1.noise.noise_scales):

@@ -3,7 +3,7 @@ from isaacgym import gymtorch, gymapi, gymutil
 import torch
 from legged_gym.envs import LeggedRobot
 from .legged_robot_config_baseline import LeggedRobotBaseCfg
-from .randomization import sample_motor_parameters
+from .randomization import push_is_due, sample_motor_parameters
 from legged_gym.utils.terrain import Terrain
 from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi
 import cv2, os
@@ -362,7 +362,9 @@ class Legged_terrains(LeggedRobot):
         if self.cfg.terrain.measure_heights:
             self.measured_heights = self._get_heights()
 
-        if self.cfg.domain_rand.push_robots and (self.common_step_counter % self.cfg.domain_rand.push_interval_s == 1):
+        if (self.cfg.domain_rand.push_robots
+                and push_is_due(self.common_step_counter,
+                                self.cfg.domain_rand.push_interval)):
             self.disturbance_force = self._push_robots()
 
         if self.cfg.terrain.measure_feet_heights:

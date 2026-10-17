@@ -16,6 +16,7 @@ from legged_gym.envs import *  # noqa: F401,F403 - registers go2_amp
 from legged_gym.utils import (
     class_to_dict,
     format_run_name,
+    normalize_effective_config,
     prepare_run_directory,
     remaining_iterations,
     task_registry,
@@ -103,8 +104,8 @@ def main():
 
     env, env_cfg = task_registry.make_env(name="go2_amp", args=args,
                                            env_cfg=env_cfg)
-    train_cfg_dict = class_to_dict(train_cfg)
-    environment_config = class_to_dict(env_cfg)
+    train_cfg_dict = normalize_effective_config(class_to_dict(train_cfg))
+    environment_config = normalize_effective_config(class_to_dict(env_cfg))
     effective_config = {
         "environment": environment_config,
         "training": train_cfg_dict,

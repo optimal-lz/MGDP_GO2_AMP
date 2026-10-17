@@ -8,6 +8,30 @@ import subprocess
 import sys
 import uuid
 
+import numpy as np
+
+
+def normalize_effective_config(value):
+    """Return one JSON-native representation for run/checkpoint config.
+
+    ``class_to_dict`` preserves several Python and NumPy container/scalar
+    types.  Normalizing once at the formal entrypoint prevents the in-memory
+    configuration from comparing unequal to the same configuration loaded
+    back from JSON during resume.
+    """
+    if isinstance(value, np.ndarray):
+        return normalize_effective_config(value.tolist())
+    if isinstance(value, np.generic):
+        return normalize_effective_config(value.item())
+    if isinstance(value, dict):
+        return {
+            normalize_effective_config(key): normalize_effective_config(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [normalize_effective_config(item) for item in value]
+    return value
+
 
 def _coefficient_token(value):
     text = format(float(value), ".15g")

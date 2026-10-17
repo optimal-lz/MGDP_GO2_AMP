@@ -24,6 +24,23 @@ ALL_DOMAIN_RANDOMIZATIONS = (
     ALLOWED_TRAINING_RANDOMIZATIONS + FORBIDDEN_DOMAIN_RANDOMIZATIONS)
 
 
+def push_is_due(common_step_counter, push_interval_steps):
+    """Return whether a push is due for a positive policy-step interval."""
+    if isinstance(push_interval_steps, (bool, np.bool_)):
+        raise ValueError("push interval must be a positive integer step count")
+    try:
+        interval_value = float(push_interval_steps)
+    except (TypeError, ValueError):
+        raise ValueError("push interval must be a positive integer step count")
+    if not np.isfinite(interval_value) or interval_value <= 0:
+        raise ValueError("push interval must be a positive integer step count")
+    interval = int(interval_value)
+    if interval_value != interval:
+        raise ValueError("push interval must be a positive integer step count")
+    step = int(common_step_counter)
+    return step > 0 and step % interval == 0
+
+
 def _randomization_switches(domain_rand):
     return tuple(
         name for name in dir(domain_rand)

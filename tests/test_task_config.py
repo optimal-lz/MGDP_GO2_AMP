@@ -80,6 +80,9 @@ class TestGo2AmpTaskConfig(unittest.TestCase):
                 "randomize_gains", "randomize_motor_strength",
                 "randomize_motor_offset", "randomize_lag_timesteps"):
             self.assertIs(domain[name], False, name)
+        noise = assignments(find_class(env_cfg, "noise"))
+        self.assertIs(noise["add_height_noise"], False)
+        self.assertIs(noise["add_privileged_noise"], False)
         rewards = assignments(find_class(env_cfg, "rewards"))
         self.assertIs(rewards.get("terrain_adaptive_reward", True), False)
         scales = assignments(find_class(find_class(env_cfg, "rewards"), "scales"))

@@ -4,6 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import numpy as np
+
 
 ROOT = Path(__file__).resolve().parents[1]
 UTIL_PATH = ROOT / "legged_gym/legged_gym/utils/go2_amp_run.py"
@@ -44,6 +46,38 @@ class TestGo2AmpRunUtilities(unittest.TestCase):
             self.module.remaining_iterations(1000, 1000)
         with self.assertRaisesRegex(ValueError, "greater"):
             self.module.remaining_iterations(999, 1000)
+
+    def test_effective_config_normalizes_numpy_and_sequences(self):
+        raw = {
+            "array": np.array([[1, 2], [3, 4]], dtype=np.int64),
+            "scalar": np.float32(0.25),
+            "nested": (np.bool_(True), [np.int32(7)]),
+        }
+        normalized = self.module.normalize_effective_config(raw)
+        self.assertEqual(normalized, {
+            "array": [[1, 2], [3, 4]],
+            "scalar": 0.25,
+            "nested": [True, [7]],
+        })
+        self.assertIs(type(normalized["scalar"]), float)
+        self.assertIs(type(normalized["nested"][0]), bool)
+
+    def test_metadata_accepts_normalized_config_after_json_round_trip(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            run_dir = Path(temporary)
+            config = self.module.normalize_effective_config({
+                "environment": {"heights": np.array([0.0, 0.5])},
+                "training": {"shape": (24, np.int64(64))},
+            })
+            self.module.write_run_metadata(
+                run_dir, config, command=["first"], git_commit="abc",
+                runtime={})
+            loaded = json.loads(
+                (run_dir / "config.json").read_text(encoding="utf-8"))
+            self.module.write_run_metadata(
+                run_dir, loaded, command=["resume"], git_commit="abc",
+                runtime={})
+            self.assertEqual(loaded, config)
 
     def test_directory_requires_explicit_resume_and_metadata_is_complete(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
@@ -99,6 +133,7 @@ class TestOfficialTrainingScript(unittest.TestCase):
         self.assertIn("Go2AmpPolicyRunner", source)
         self.assertIn("runner.load_pair", source)
         self.assertIn("remaining_iterations", source)
+        self.assertIn("normalize_effective_config", source)
         self.assertIn("runner.learn", source)
 
 
