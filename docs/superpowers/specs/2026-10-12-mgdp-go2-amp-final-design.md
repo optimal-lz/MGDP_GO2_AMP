@@ -2,7 +2,8 @@
 
 日期：2026-10-12
 初版基线：2026-10-14，Git `8d653e2`
-状态：V1 初版已实现并完成本地审查；RTX 4090 / Isaac Gym smoke 待执行
+纠偏修订：2026-10-16，补充配置序列化、push 时钟、策略侧 GRU、reset/resume 与评估统计契约
+状态：V1 初版完成本地审查；纠偏实现及 RTX 4090 / Isaac Gym smoke 待完成
 适用仓库：`D:\New Beginning Help\LZAMP\MGDP_GO2_AMP`
 
 ## 1. 文档地位与目标
@@ -24,9 +25,9 @@
 ## 2. 总体数据流和信息隔离
 
 ```text
-带噪深度 -> MGDP World Model -> detach WM token --\
-带噪本体历史 -> proprio token ---------------------+-> PPO Actor -> action
-部署可用当前本体观测与命令 -------------------------/
+带噪深度 -> MGDP World Model -> detach CNN token -> Actor GRU --\
+带噪本体历史 -> proprio token --------------------------------+-> PPO Actor -> action
+部署可用当前本体观测与命令 ------------------------------------/
 
 Actor 基础观测 + 干净特权信息 -----------------------> PPO Critic
 
@@ -34,7 +35,9 @@ Actor 基础观测 + 干净特权信息 -----------------------> PPO Critic
 干净 30D 专家状态转移 ---+-> 单一 AMP 判别器 -> AMP reward -> PPO return
 ```
 
-- PPO 不得反向传播到 WM；Actor 的 WM token 必须 `detach`。
+- PPO 不得反向传播到 WM；CNN token 在进入策略侧 GRU 前必须 `detach`。
+- GRU 属于 Actor/PPO，而不属于 WM。GRU 参数只由 PPO optimizer 更新，随 policy checkpoint 保存；WM optimizer/checkpoint 不包含 GRU。
+- GRU 只在新的深度 token 到达时更新 hidden state；重复使用缓存 token 的策略步保持 hidden state不变。episode reset 必须清零对应 hidden state。
 - 判别器输出不进入 Actor、Critic 或 WM，只通过 reward 影响 PPO return。
 - WM 输入带噪、AMP 状态干净，二者用途不同且支路独立。
 - 专家数据不初始化环境，也不直接生成策略动作。
@@ -111,8 +114,10 @@ r_total   = r_base + lambda_amp * r_amp_raw + r_termination
 
 - 深度刷新间隔 5 个策略步；每次刷新执行一次在线 WM 更新。
 - 每个 rollout 后额外执行 4 次 WM 更新。
-- Actor 使用带噪深度产生且已 `detach` 的 WM token。
+- Actor 使用带噪深度产生且已 `detach` 的 CNN token，再由策略侧 64D GRU 形成时序视觉 token。
 - WM 以带噪深度为输入、以干净深度/高度为监督。
+- WM loss 在 CNN/map encoder 与 decoder 上计算；不得把无监督的策略 GRU 混入 WM optimizer。
+- PPO rollout 必须保存 GRU 初始 hidden、深度刷新 mask 与 episode reset mask；PPO minibatch 按完整环境时间序列训练，禁止把 recurrent transition 随机打散后伪装成无状态样本。
 
 每轮固定顺序：
 
@@ -136,7 +141,7 @@ Actor 只读部署可用信息：
 - 速度命令
 - 带噪关节位置、关节速度、上一动作
 - 4 步本体历史 token
-- 带噪深度产生、已 `detach` 的 MGDP WM token
+- 带噪深度产生、已 `detach` 的 MGDP CNN token及其策略侧 GRU 时序表示
 
 Actor 不得读取真实基座线速度、干净高度图、接触力、terrain id/level 或其他仿真状态。
 
@@ -218,6 +223,8 @@ reset：
 - upright，出生高度为局部地面 `+0.45 m`。
 - flat/rough_flat 出生 xy 均为 `±0.2 m`；结构化地形安全起点为 `x±0.2 m, y=0`。
 - 重置 proprio/depth/WM history，并把 AMP previous state 设为 reset 后初始状态。
+- reset 后不得继续暴露上一 episode 的缓存视觉 token、基座派生量或 Critic 特权量；没有新深度帧时使用清零后的视觉状态，直至下一个正常深度刷新。
+- policy-side GRU 对 done 环境逐项清零；Viewer、comparison 与训练 rollout 使用同一 reset 规则。
 - 绝不产生 terminal-to-reset AMP transition。
 
 ## 12. 随机化与噪声
@@ -226,7 +233,7 @@ Domain randomization 从训练开始启用：
 
 - friction `[0.5,1.25]`
 - action latency `[0,0.02] s`
-- 每 15 s push，最大 xy velocity 1
+- 每 15 s push，最大 xy velocity 1；15 s 必须先按 policy dt 换算为整数策略步，运行时不得直接把秒数当作 step 取模。
 
 首版不随机 restitution、base/link mass、COM、PD gains、motor strength、motor/joint offsets；无随机化课程或地形例外。
 
@@ -294,11 +301,11 @@ eval/
   videos/
 ```
 
-`config.json` 保存完整生效配置；`run.json` 保存命令、Git commit、Python/PyTorch/CUDA/Isaac Gym 版本、实际专家文件。
+`config.json` 保存完整生效配置；`run.json` 保存命令、Git commit、Python/PyTorch/CUDA/Isaac Gym 版本、实际专家文件。生效配置在哈希、写入和恢复比较前必须规范化为 JSON 原生类型：NumPy array/scalar 转为 list/Python scalar，tuple 转为 list；同一规范化结果同时用于 checkpoint compatibility 与 metadata，禁止首次运行不可序列化或续训因 tuple/list 往返而误判不兼容。
 
-policy checkpoint 包含 Actor/Critic、PPO optimizer、PPO 当前自适应 learning rate、terrain levels、iteration、RNG；AMP 模式另含 D、D optimizer、AMP normalizer/replay。恢复 terrain levels 时必须同步派生的 `env_origins` 与 `env_class`。WM checkpoint 含 WM 网络、optimizer、depth stats、iteration。manifest 记录文件名、配置哈希、mode、coef、seed、env count、iteration 与一致性检查；`last.json` 只指向最近完整 pair，不复制大型 `last.pt`。
+policy checkpoint 包含 Actor/Critic、策略侧 GRU、PPO optimizer、PPO 当前自适应 learning rate、terrain levels、iteration、RNG；AMP 模式另含 D、D optimizer、AMP normalizer/replay。恢复 terrain levels 时必须同步派生的 `env_origins` 与 `env_class`。WM checkpoint 只含 WM CNN/map 网络、optimizer、depth stats、iteration，不含策略 GRU。manifest 记录文件名、配置哈希、mode、coef、seed、env count、iteration 与一致性检查；`last.json` 只指向最近完整 pair，不复制大型 `last.pt`。
 
-恢复必须严格配对 policy、WM、manifest。mode/coef/seed/env count/关键配置不匹配则拒绝。不支持旧 checkpoint 正式全量续训，也不把 policy-only warm start 纳入正式流程。
+恢复必须严格配对 policy、WM、manifest。mode/coef/seed/env count/关键配置不匹配则拒绝。不支持旧 checkpoint 正式全量续训，也不把 policy-only warm start 纳入正式流程。checkpoint 不保存完整 Isaac Gym 中间物理状态，因此正式续训语义是：恢复权重、optimizer、AMP/RNG 与 terrain levels 后，在恢复后的 terrain origins 上统一开始新 episode，清空策略 GRU/history，并用已加载 WM 强制生成第一份新视觉 token；不得把 level 标签恢复到旧物理位置上继续运行。
 
 ## 16. 可视化与对照评估
 
@@ -310,6 +317,7 @@ policy checkpoint 包含 Actor/Critic、PPO optimizer、PPO 当前自适应 lear
 - proprio/depth/camera-mount/domain randomization/push 全部关闭；禁用深度噪声时不再生成无效随机 tensor
 - 固定 seed、少量 env
 - live depth 与 WM height panels
+- checkpoint 加载并设置 terrain/level/command 后，先执行一致的 reset 和强制视觉刷新，再产生第一步动作；每次 done 都重置 Actor GRU。
 - episode 结束打印 command/actual velocity、terrain/level、AMP reward、failure reason
 
 仅传 `--record` 时检查 FFmpeg，并接受 output/duration/fps；默认写入 `<run>/eval/videos/`。训练和普通 Viewer 不自动录制。
@@ -329,7 +337,7 @@ WM 解释图保留，默认覆盖 latest：
 
 默认矩阵：十类 terrain；levels 0/9/19；vx 0.4/0.8；flat/rough_flat 另含 turn cases；每 case 20 episodes。
 
-指标：completion/progress、vx/yaw RMSE、base-contact failure、action rate、torque、episode length、WM errors、AMP style score。两种 policy 的 style score 都使用 AMP checkpoint 中同一个冻结 D+normalizer，仅作诊断。
+指标：completion/progress、vx/yaw RMSE、base-contact failure、action rate、torque、episode length、WM errors、AMP style score。两种 policy 的 style score 都使用 AMP checkpoint 中同一个冻结 D+normalizer，仅作诊断。WM error 只在真实深度刷新帧上累计，并按每个环境分别计算；非刷新步不得以零 loss 参与平均，也不得把 batch mean 复制成逐 episode 指标。
 
 只输出：
 
@@ -351,7 +359,7 @@ WM 解释图保留，默认覆盖 latest：
 - task、regularization、AMP contribution、total reward
 - vx/yaw error、episode length、base-contact failure、mean terrain level
 - AMP D policy/expert、D loss、GP、valid transition count、replay fill；noAMP 只记 AMP contribution=0，不创建 D train tags
-- WM total/depth/height/contrastive losses
+- WM total/depth/height/contrastive losses，按该 iteration 内实际执行的在线与 rollout 后额外 WM updates 聚合，不记录单次最后更新冒充 iteration 均值
 - PPO surrogate/value/entropy/KL/action std
 - iteration time
 
@@ -372,12 +380,17 @@ CPU/static tests 覆盖：
 - 十地形创建、比例、课程
 - terminal/reset transition
 - checkpoint pair、manifest、absolute target iteration
+- 完整生效配置的 NumPy/tuple JSON 规范化与 resume round trip
+- push 的秒到策略步换算及首次触发时刻
+- policy-side GRU 梯度、刷新 gating、时间序列 minibatch、episode reset 与 checkpoint 所有权
+- reset/resume/viewer/comparison 的首帧观测一致性
+- 逐环境、仅刷新帧 WM metric 聚合
 - mode/coef/seed/env/config mismatch
 - 统一 CLI
 
 不得用测试维持旧 Stage1/Stage2 的运行结果兼容，也不得恢复 ramp、anchor 或 double replay。旧任务注册暂时保留，但不属于 V1 正式入口或 GPU 验收范围；后续只有在确认不影响 `go2_amp` 所需 MGDP 感知依赖后才清理。
 
-本地 CPU/static 基线为 93 项测试通过、10 项 PyTorch/Isaac 训练机测试按预期跳过，`compileall` 与 `git diff --check` 通过。GPU smoke 仍需验证有限数值、固定更新顺序、noAMP 不创建 AMP 路径、pair save/restore 后 iteration/terrain/optimizer/normalizer/replay/RNG 连续，以及 4096 env 在 RTX 4090 24 GB 上可运行；若 OOM 再按实测峰值诊断。
+2026-10-16 纠偏前本地基线为共运行 93 项、83 项通过、10 项 PyTorch/Isaac 训练机测试按声明跳过，`compileall` 与 `git diff --check` 通过。该基线不证明正式入口可序列化、push 周期正确或 reset/resume 的运行时状态一致。纠偏后必须重新记录完整测试数与 GPU smoke 结果。GPU smoke 仍需验证有限数值、固定更新顺序、noAMP 不创建 AMP 路径、pair save/restore 后 iteration/terrain/optimizer/normalizer/replay/RNG 连续，以及 4096 env 在 RTX 4090 24 GB 上可运行；若 OOM 再按实测峰值诊断。
 
 性能不写成单元测试阈值。训练效果由 Viewer、可选视频、WM PNG、comparison CSV/PNG、轻量 TensorBoard 综合判断；不重复专家回放。
 

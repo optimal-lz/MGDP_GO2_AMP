@@ -2,6 +2,8 @@
 
 > **Status (2026-10-14):** Historical implementation plan. The local implementation portions of Tasks 1-12 and the post-implementation remediation are complete; training-host validation remains deferred as recorded below. This file preserves how the implementation was carried out; the normative behavior is defined by the final design spec, and the delivered state is recorded in `docs/MGDP_GO2_AMP_V1_INITIAL_BASELINE.md`.
 
+> **2026-10-16 correction notice:** Whole-project audit found runtime defects in full-config JSON normalization, push timing, GRU training ownership, reset/resume observation coherence, and WM evaluation aggregation. Those corrections are specified and tracked in `docs/superpowers/plans/2026-10-16-mgdp-go2-amp-runtime-corrections.md`; for these areas the corrective plan supersedes this historical plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the single-stage `go2_amp` task that preserves MGDP perception/PPO, adds the frozen WMP-style AMP regularizer, and provides reproducible AMP/noAMP training, restore, visualization, and comparison.
