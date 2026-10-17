@@ -201,6 +201,8 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             iteration_start = time.time()
             collection_start = time.time()
             rollout_metrics = self._new_rollout_metrics()
+            if getattr(self.env, "use_world_model", False):
+                self.env.reset_wm_iteration_metrics()
 
             for _ in range(self.num_steps_per_env):
                 commands_before = self.env.commands[:, (0, 2)].detach().clone()
@@ -274,6 +276,13 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
 
             transition_count = rollout_metrics["transition_count"]
             episode_count = rollout_metrics["episode_count"]
+            wm_metrics = (
+                self.env.get_wm_iteration_metrics()
+                if getattr(self.env, "use_world_model", False)
+                else {
+                    "total_loss": 0.0, "depth_loss": 0.0,
+                    "height_loss": 0.0, "contrastive_loss": 0.0,
+                })
 
             core = {
                 "reward/task": self._mean(
@@ -295,11 +304,10 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                 "terrain/mean_level": self._tensor_mean(
                     rollout_metrics["terrain_level_sum"].sum(),
                     rollout_metrics["terrain_transition_count"].sum()),
-                "wm/total_loss": getattr(self.env, "total_wm_loss", 0.0),
-                "wm/depth_loss": getattr(self.env, "visual_mse_loss", 0.0),
-                "wm/height_loss": getattr(self.env, "height_mse_loss", 0.0),
-                "wm/contrastive_loss": getattr(
-                    self.env, "contrastive_loss", 0.0),
+                "wm/total_loss": wm_metrics["total_loss"],
+                "wm/depth_loss": wm_metrics["depth_loss"],
+                "wm/height_loss": wm_metrics["height_loss"],
+                "wm/contrastive_loss": wm_metrics["contrastive_loss"],
                 "ppo/surrogate_loss": self.alg.last_update_metrics[
                     "ppo/surrogate_loss"],
                 "ppo/value_loss": self.alg.last_update_metrics[

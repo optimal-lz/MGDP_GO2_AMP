@@ -400,6 +400,7 @@ class _IsaacEvaluator:
                 env.reset_idx(torch.tensor(
                     [env_index], device=env.device, dtype=torch.long))
             env.compute_observations()
+            env.refresh_visual_observation()
             obs = env.get_observations()
             runner.alg.actor_critic.reset(torch.ones(
                 env.num_envs, dtype=torch.bool, device=env.device))
@@ -413,6 +414,8 @@ class _IsaacEvaluator:
             torque = torch.zeros(env.num_envs, device=env.device)
             wm_depth = torch.zeros(env.num_envs, device=env.device)
             wm_height = torch.zeros(env.num_envs, device=env.device)
+            wm_refresh_count = torch.zeros(
+                env.num_envs, device=env.device)
             style = torch.zeros(env.num_envs, device=env.device)
             initial_xy = env.root_states[:, :2].clone()
 
@@ -424,6 +427,7 @@ class _IsaacEvaluator:
                 with torch.inference_mode():
                     actions = policy_fn(obs)
                     obs, _, dones, infos = env.step(actions.detach())
+                    runner.alg.actor_critic.reset(dones)
                     amp_after = select_next_amp_state(
                         env.get_amp_observations().clone(), dones,
                         infos.get("terminal_amp_states"))
@@ -448,14 +452,18 @@ class _IsaacEvaluator:
                 action_rate += mask * (
                     actions - previous_actions).square().mean(dim=1)
                 torque += mask * env.torques.abs().mean(dim=1)
-                wm_depth += mask * float(env.visual_mse_loss)
-                wm_height += mask * float(env.height_mse_loss)
+                wm_mask = active & env.wm_metric_mask
+                wm_float_mask = wm_mask.float()
+                wm_depth += wm_float_mask * env.visual_mse_per_env
+                wm_height += wm_float_mask * env.height_mse_per_env
+                wm_refresh_count += wm_float_mask
                 style += mask * style_step
                 progress_now = position_now[:, 0] - initial_xy[:, 0]
                 final_progress[active] = progress_now[active]
                 active &= ~dones.bool()
 
             count = torch.clamp(step_count, min=1.0)
+            wm_count = torch.clamp(wm_refresh_count, min=1.0)
             forward_case = first["vx_command"] > 0
             completion = (
                 final_progress >= env.terrain.env_length / 2
@@ -471,8 +479,8 @@ class _IsaacEvaluator:
                     "action_rate": float(action_rate[index] / count[index]),
                     "torque": float(torque[index] / count[index]),
                     "episode_length": float(step_count[index] * env.dt),
-                    "wm_depth_mse": float(wm_depth[index] / count[index]),
-                    "wm_height_mse": float(wm_height[index] / count[index]),
+                    "wm_depth_mse": float(wm_depth[index] / wm_count[index]),
+                    "wm_height_mse": float(wm_height[index] / wm_count[index]),
                     "amp_style_score": float(style[index] / count[index]),
                 })
         return rows

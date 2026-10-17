@@ -6,6 +6,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = ROOT / "legged_gym/rl/MGDP/runners/go2_amp_logging.py"
+RUNNER_PATH = ROOT / "legged_gym/rl/MGDP/runners/go2_amp_runner.py"
+RANDOM_DOG_PATH = ROOT / "legged_gym/legged_gym/envs/random_dog/random_dog.py"
 
 
 def load_logger():
@@ -75,6 +77,16 @@ class Writer:
 
 
 class TestGo2AmpLogging(unittest.TestCase):
+    def test_runner_uses_iteration_aggregate_for_all_wm_updates(self):
+        runner = RUNNER_PATH.read_text(encoding="utf-8")
+        environment = RANDOM_DOG_PATH.read_text(encoding="utf-8")
+        self.assertIn("reset_wm_iteration_metrics", runner)
+        self.assertIn("get_wm_iteration_metrics", runner)
+        self.assertIn("def reset_wm_iteration_metrics", environment)
+        self.assertIn("def get_wm_iteration_metrics", environment)
+        self.assertIn("visual_mse_per_env", environment)
+        self.assertIn("height_mse_per_env", environment)
+
     def test_core_once_per_iteration_and_detail_every_ten(self):
         metrics = load_logger()(Writer(), mode="amp", terrain_names=("flat",))
         core = {**CORE, **AMP_CORE}

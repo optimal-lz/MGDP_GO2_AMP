@@ -230,7 +230,10 @@ def main():
     env.env_class[:] = env.terrain_class[
         env.terrain_levels, env.terrain_types]
     env.reset_idx(env_ids)
+    env.compute_observations()
+    env.refresh_visual_observation()
     obs = env.get_observations()
+    runner.alg.actor_critic.reset()
     policy, _ = runner.get_inference_policy(device=env.device)
 
     camera_offset = (
@@ -255,6 +258,7 @@ def main():
             with torch.inference_mode():
                 actions = policy(obs)
                 obs, _, dones, infos = env.step(actions.detach())
+                runner.alg.actor_critic.reset(dones)
                 if runner.amp is not None:
                     amp_after = select_next_amp_state(
                         env.get_amp_observations().clone(), dones,

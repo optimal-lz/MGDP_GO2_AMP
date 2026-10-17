@@ -79,6 +79,13 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
             self.mse_loss = nn.MSELoss()
             self.l1_loss = nn.L1Loss()
             self.latest_world_model_batch = None
+            self.wm_metric_mask = torch.zeros(
+                self.num_envs, device=self.device, dtype=torch.bool)
+            self.visual_mse_per_env = torch.zeros(
+                self.num_envs, device=self.device)
+            self.height_mse_per_env = torch.zeros(
+                self.num_envs, device=self.device)
+            self.reset_wm_iteration_metrics()
 
             if self.load_world_model_policy:
                 from legged_gym import LEGGED_GYM_ROOT_DIR
@@ -554,6 +561,16 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                         target_clean=target_clean,
                         obs_height_input=obs_height_input
                     )
+                    self.visual_mse_per_env = (
+                        (visual_pre - target_clean).square()
+                        .flatten(start_dim=1).mean(dim=1).detach())
+                    if obs_height_pre is not None:
+                        self.height_mse_per_env = (
+                            (obs_height_pre - obs_height_input).square()
+                            .flatten(start_dim=1).mean(dim=1).detach())
+                    else:
+                        self.height_mse_per_env.zero_()
+                    self.wm_metric_mask.fill_(True)
 
                     w_v_mse = getattr(self.cfg.camera, 'wm_visual_mse_weight', 1.2)
                     w_v_l1 = getattr(self.cfg.camera, 'wm_visual_l1_weight', 0.3)
@@ -579,8 +596,37 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                                 all_wm_params += g['params']
                             torch.nn.utils.clip_grad_norm_(all_wm_params, max_norm=float(wm_grad_clip))
                         self.wm_optimizer.step()
+                        self._wm_iteration_sums["total_loss"] += (
+                            self.total_wm_loss.detach())
+                        self._wm_iteration_sums["depth_loss"] += (
+                            self.visual_mse_loss.detach())
+                        self._wm_iteration_sums["height_loss"] += (
+                            torch.as_tensor(
+                                self.height_mse_loss,
+                                device=self.device).detach())
+                        self._wm_iteration_sums["contrastive_loss"] += (
+                            torch.as_tensor(
+                                self.contrastive_loss,
+                                device=self.device).detach())
+                        self._wm_iteration_update_count += 1
 
         return visual_pre, obs_height_pre, obs_height_input, visual_token
+
+    def reset_wm_iteration_metrics(self):
+        self._wm_iteration_sums = {
+            name: torch.zeros((), device=self.device)
+            for name in (
+                "total_loss", "depth_loss", "height_loss",
+                "contrastive_loss")
+        }
+        self._wm_iteration_update_count = 0
+
+    def get_wm_iteration_metrics(self):
+        count = max(int(self._wm_iteration_update_count), 1)
+        return {
+            name: total / count
+            for name, total in self._wm_iteration_sums.items()
+        }
 
     def compute_world_model_outputs(self, visual_input, target_clean, obs_height_input=None):
         """Forward and loss for depth (visual) and height map. Returns visual_pre, height_pre, inputs, token, losses."""
@@ -719,6 +765,8 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
         if self.use_camera:
             self.image_update_mask.zero_()
             self.obs_dict['image_update_mask'] = self.image_update_mask
+            if self.use_world_model:
+                self.wm_metric_mask.zero_()
             if self.global_counter % self.cfg.camera.update_interval == 0:
                 self.get_camera_sensor()
             elif self.use_world_model:

@@ -112,6 +112,20 @@ class TestComparisonOutputs(unittest.TestCase):
         self.assertNotIn("pass_fail", source)
         self.assertNotIn("report.md", source)
 
+    def test_wm_metrics_are_per_environment_and_refresh_only(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        for text in (
+                "visual_mse_per_env", "height_mse_per_env",
+                "wm_metric_mask", "wm_refresh_count"):
+            self.assertIn(text, source)
+        self.assertNotIn("float(env.visual_mse_loss)", source)
+        self.assertNotIn("float(env.height_mse_loss)", source)
+
+    def test_each_case_refreshes_before_first_action_and_resets_policy_dones(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("env.refresh_visual_observation()", source)
+        self.assertIn("runner.alg.actor_critic.reset(dones)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

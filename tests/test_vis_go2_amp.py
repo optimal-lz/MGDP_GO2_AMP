@@ -64,6 +64,13 @@ class TestGo2AmpViewer(unittest.TestCase):
                 "AMP reward", "failure"):
             self.assertIn(text, self.source)
 
+    def test_loaded_case_refreshes_before_action_and_resets_done_memory(self):
+        main = self.functions["main"]
+        self.assertIn("env.refresh_visual_observation()", main)
+        self.assertLess(main.index("env.refresh_visual_observation()"),
+                        main.index("actions = policy(obs)"))
+        self.assertIn("runner.alg.actor_critic.reset(dones)", main)
+
 
 if __name__ == "__main__":
     unittest.main()
