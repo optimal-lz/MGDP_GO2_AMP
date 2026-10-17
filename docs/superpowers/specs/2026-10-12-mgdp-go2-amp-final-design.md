@@ -390,7 +390,7 @@ CPU/static tests 覆盖：
 
 不得用测试维持旧 Stage1/Stage2 的运行结果兼容，也不得恢复 ramp、anchor 或 double replay。旧任务注册暂时保留，但不属于 V1 正式入口或 GPU 验收范围；后续只有在确认不影响 `go2_amp` 所需 MGDP 感知依赖后才清理。
 
-2026-10-16 纠偏前本地基线为共运行 93 项、83 项通过、10 项 PyTorch/Isaac 训练机测试按声明跳过，`compileall` 与 `git diff --check` 通过。该基线不证明正式入口可序列化、push 周期正确或 reset/resume 的运行时状态一致。纠偏后必须重新记录完整测试数与 GPU smoke 结果。GPU smoke 仍需验证有限数值、固定更新顺序、noAMP 不创建 AMP 路径、pair save/restore 后 iteration/terrain/optimizer/normalizer/replay/RNG 连续，以及 4096 env 在 RTX 4090 24 GB 上可运行；若 OOM 再按实测峰值诊断。
+2026-10-16 纠偏前本地基线为共运行 93 项、83 项通过、10 项 PyTorch/Isaac 训练机测试按声明跳过。2026-10-17 纠偏实现后重新发现 109 项测试，其中 96 项通过、13 项 PyTorch 训练机测试按声明跳过，`compileall` 与 `git diff --check` 通过。该结果仍不证明 GPU/Isaac 运行效果。GPU smoke 必须验证被跳过的张量测试实际执行、有限数值、固定更新顺序、noAMP 不创建 AMP 路径、pair save/restore 后 iteration/terrain/optimizer/normalizer/replay/RNG 连续，以及 4096 env 在 RTX 4090 24 GB 上可运行；若 OOM 再按实测峰值诊断。
 
 性能不写成单元测试阈值。训练效果由 Viewer、可选视频、WM PNG、comparison CSV/PNG、轻量 TensorBoard 综合判断；不重复专家回放。
 

@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-mgdp-go2-amp-final-design.md`
 
+**Execution status (2026-10-17):** Tasks 1-4 and the Task 5 local documentation/regression work are implemented in commits `1c01ed8`, `254592e`, `91bdd83`, and `0d126ec` plus the documentation closeout commit. Local discovery found 109 tests: 96 passed and 13 PyTorch training-host tests were skipped as declared. Linux CUDA/Isaac Gym smoke, Viewer motion review, and 4096-environment load verification remain intentionally pending.
+
 ## Global Constraints
 
 - Work only in `D:\New Beginning Help\LZAMP\MGDP_GO2_AMP`; do not create a parallel project or `amp_v2`.

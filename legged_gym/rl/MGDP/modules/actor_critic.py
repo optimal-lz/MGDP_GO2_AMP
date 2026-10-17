@@ -199,8 +199,8 @@ class ActorCritic(nn.Module):
         actor_obs = torch.cat(
             [obs_dict['obs'], proprioceptive_token, visual_token], dim=-1)
         if return_tokens:
-            visual_tokens_height = visual_token[:, 0:32]
-            visual_tokens_image = visual_token[:, 32:]
+            visual_tokens_height = visual_token[..., 0:32]
+            visual_tokens_image = visual_token[..., 32:]
             return actor_obs, [
                 proprioceptive_token,
                 visual_tokens_height,

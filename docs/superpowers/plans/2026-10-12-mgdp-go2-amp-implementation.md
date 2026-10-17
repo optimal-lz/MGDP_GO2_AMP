@@ -581,3 +581,9 @@ The plan above remains a historical execution record. The following later findin
 - The `random_dog_stage1/2` registrations remain temporarily present. They are not a correctness or compatibility target for this new project and may be removed later if they interfere with GPU training. The required MGDP perception, World Model, history encoder, PPO, and shared environment primitives remain dependencies of `go2_amp`.
 
 When this historical plan conflicts with later wording, precedence is: final design specification for intended behavior, V1 initial baseline for delivered/verified state, then this implementation plan for execution history.
+
+### 2026-10-17 runtime correction completion
+
+The corrective implementation is recorded in `docs/superpowers/plans/2026-10-16-mgdp-go2-amp-runtime-corrections.md`. Commits `1c01ed8`, `254592e`, `91bdd83`, and `0d126ec` corrected config serialization, push units, clean height supervision, Actor-owned recurrent visual memory, reset/resume freshness, evaluation recurrence, per-environment WM comparison metrics, and iteration-aggregate WM logging.
+
+Fresh local evidence after those corrections: 109 tests discovered, 96 passed and 13 PyTorch training-host tests skipped as declared. GPU/Isaac behavior remains unverified locally. Checkpoints created before the Actor-side GRU correction are not formal-resume compatible.

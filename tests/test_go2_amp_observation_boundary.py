@@ -44,6 +44,10 @@ class TestObservationBoundarySource(unittest.TestCase):
         self.assertIn("image_update_mask", self.methods["build_actor_input"])
         self.assertIn("visual_gru", self.methods["_visual_memory"])
         self.assertIn("visual_hidden_state", self.methods["reset"])
+        self.assertIn("visual_token[..., 0:32]",
+                      self.methods["build_actor_input"])
+        self.assertIn("visual_token[..., 32:]",
+                      self.methods["build_actor_input"])
 
     def test_environment_publishes_only_detached_wm_tokens(self):
         source = (ROOT / "legged_gym/legged_gym/envs/random_dog/random_dog.py").read_text(

@@ -12,7 +12,7 @@
 
 ## 正式设计摘要
 
-- Actor 只使用部署时可获得的带噪本体观测、命令、本体历史 token，以及由带噪深度产生并 `detach` 的 MGDP WM token。
+- Actor 只使用部署时可获得的带噪本体观测、命令、本体历史 token，以及由带噪深度产生并 `detach` 的 MGDP WM CNN token。其 64D GRU 属于 Actor/PPO，仅在每 5 步深度刷新时更新并在 episode done 时清零。
 - Critic 使用 Actor 的 45D 基础本体观测，加真实基座线速度、足端高度和局部仿真高度采样；不重复接入 WM token。
 - AMP 与 Actor、Critic、WM 分支独立。单一判别器比较策略与专家的干净 30D 状态转移，只通过 AMP reward 影响 PPO return。
 - idle 命令精确为 `vx=0, yaw=0`，只使用 task、regularization 和 safety reward，也不写 AMP policy replay。其余均为 locomotion 命令并启用 AMP。
@@ -44,6 +44,8 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Windows 当前工作区没有安装 PyTorch、Isaac Gym 和匹配的 CUDA 栈，因此这里只能完成纯 Python、静态与源码编译验证；GPU 训练和 Viewer 验证必须在 RTX 4090 云服务器上执行。
+
+当前运行时修正版改变了 Actor GRU 所属 checkpoint 和完整配置哈希。2026-10-17 修正前生成的 policy/WM checkpoint 与正式训练不兼容，不要用它们续训；云端应从当前代码创建新的 run。完整本地回归为 109 项测试，其中 96 项通过、13 项 PyTorch 训练环境测试按声明跳过；云端必须确认这些张量测试实际执行而不是继续显示 skip。
 
 ## 统一训练入口
 
@@ -148,7 +150,9 @@ legged_gym/outputs/go2_amp/<run_name>/
 
 `checkpoint_1000.json` 记录 mode、AMP 系数、seed、环境数、配置哈希，以及 policy/WM 文件各自的 SHA-256。`last.json` 只包含最新 manifest 指针。加载时会在改变模型前验证兼容性、文件存在性、哈希与迭代号，禁止 policy-only 或错配 WM 的正式续训。
 
-policy checkpoint 包含 PPO 网络与优化器、地形等级、Python/NumPy/Torch CPU/CUDA RNG，以及 AMP 模式下的判别器、优化器、normalizer、replay 和采样 RNG。WM checkpoint 独立保存网络、优化器与统计量，便于解释性分析，但只能与同 manifest 的 policy 配对。
+policy checkpoint 包含 Actor 的 64D GRU、其余 PPO 网络与优化器、地形等级、Python/NumPy/Torch CPU/CUDA RNG，以及 AMP 模式下的判别器、优化器、normalizer、replay 和采样 RNG。WM checkpoint 只保存 CNN/map 感知网络、优化器与统计量，不再保存 GRU，便于独立解释性分析，但只能与同 manifest 的 policy 配对。
+
+正式 resume 先验证并加载 policy 与 WM 两半，再恢复地形层级和 RNG，然后在这些层级上开启全新 episode、清空 Actor GRU，并用已加载 WM 强制刷新首个视觉 token。它保证训练状态与课程连续，但不宣称恢复 checkpoint 保存瞬间的物理仿真中途状态。
 
 ## TensorBoard
 
@@ -156,7 +160,7 @@ policy checkpoint 包含 PPO 网络与优化器、地形等级、Python/NumPy/To
 tensorboard --logdir legged_gym/outputs/go2_amp
 ```
 
-每轮只记录精简核心曲线：task reward、AMP contribution、total reward、PPO 更新指标以及采样/学习耗时；每 10 轮补充 terrain mean level 与 action std。AMP 模式记录判别器指标，noAMP 不产生判别器训练曲线且 AMP contribution 必须恒为 0。TensorBoard 用于诊断，不改变训练流程。
+每轮只记录精简核心曲线：task reward、AMP contribution、total reward、PPO 更新指标以及采样/学习耗时；WM loss 是该轮全部在线和额外 WM optimizer step 的均值。每 10 轮补充 terrain mean level 与 action std。AMP 模式记录判别器指标，noAMP 不产生判别器训练曲线且 AMP contribution 必须恒为 0。TensorBoard 用于诊断，不改变训练流程。
 
 ## Isaac Gym Viewer 与 WM 可解释性
 
@@ -228,7 +232,8 @@ CSV 保留逐 case 数据与汇总，PNG 用于快速对照完成率、速度追
 1. 64 环境 AMP/noAMP 均能保存、严格加载并继续训练。
 2. 4096 环境 AMP 运行 10 轮无 OOM、NaN/Inf，policy/WM/D 与 TensorBoard 指标正常。
 3. 用同一正式目录续训，checkpoint 迭代单调且 `last.json` 正确指向最新 manifest。
-4. Viewer 在 flat、stairs 及其他代表地形上冻结运行，WM 图片持续更新。
-5. AMP/noAMP 同迭代对照输出两份 CSV 和四张 PNG，并由人工结合运动效果审阅。
+4. paired resume 后确认机器人从保存的地形层级开始新 episode，第一步前 WM token 已刷新，且 TensorBoard step 单调。
+5. Viewer 在 flat、stairs 及其他代表地形上冻结运行，WM 图片持续更新。
+6. AMP/noAMP 同迭代对照输出两份 CSV 和四张 PNG；其中 WM MSE 按环境并只按真实深度刷新帧统计，再由人工结合运动效果审阅。
 
 参见 [`SOURCES.md`](SOURCES.md) 了解参考项目与数据来源。
