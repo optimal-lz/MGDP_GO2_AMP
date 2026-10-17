@@ -17,6 +17,7 @@ class RolloutStorage:
             self.privileged_info = None  # unknow value in the real world
             self.proprio_hist = None  # obs_history of the obs
             self.image_buf = None  # image_buf of the obs
+            self.image_update_mask = None
             self.next_observations = None
 
         def clear(self):
@@ -61,6 +62,9 @@ class RolloutStorage:
 
         # For image info
         self.image_buf = torch.zeros(num_transitions_per_env, num_envs, image_info_shape, device=self.device)
+        self.image_update_mask = torch.zeros(
+            num_transitions_per_env, num_envs, 1,
+            device=self.device, dtype=torch.bool)
 
         self.num_transitions_per_env = num_transitions_per_env
         self.num_envs = num_envs
@@ -91,6 +95,11 @@ class RolloutStorage:
 
         # For image info
         self.image_buf[self.step].copy_(transition.image_buf)
+        if transition.image_update_mask is None:
+            self.image_update_mask[self.step].fill_(True)
+        else:
+            self.image_update_mask[self.step].copy_(
+                transition.image_update_mask.to(torch.bool).view(-1, 1))
 
         # For His
         self.proprio_hist[self.step].copy_(transition.proprio_hist)
@@ -98,19 +107,19 @@ class RolloutStorage:
         self.step += 1
 
     def _save_hidden_states(self, hidden_states):
-        if hidden_states is None or hidden_states == (None, None):
+        if hidden_states is None:
             return
-        # make a tuple out of GRU hidden state sto match the LSTM format
-        hid_a = hidden_states if isinstance(hidden_states, tuple) else (hidden_states,)
+        if isinstance(hidden_states, tuple):
+            hidden_states = hidden_states[0]
+        if hidden_states is None:
+            return
 
         # initialize if needed
         if self.saved_hidden_states_a is None:
-            self.saved_hidden_states_a = [torch.zeros(self.observations.shape[0], *hid_a[i].shape, device=self.device)
-                                          for i in range(len(hid_a))]
-
-        # copy the states
-        for i in range(len(hid_a)):
-            self.saved_hidden_states_a[i][self.step].copy_(hid_a[i])
+            self.saved_hidden_states_a = torch.zeros(
+                self.num_transitions_per_env, *hidden_states.shape,
+                device=self.device, dtype=hidden_states.dtype)
+        self.saved_hidden_states_a[self.step].copy_(hidden_states)
 
     def clear(self):
         self.step = 0
@@ -242,6 +251,46 @@ class RolloutStorage:
                     old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None,
                                                                                 None), None, privileged_info_batch, \
                     proprio_hist_batch, image_buf_batch, next_obs_batch
+
+    def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
+        """Yield complete time-major sequences while shuffling environments."""
+        if self.saved_hidden_states_a is None:
+            raise RuntimeError("recurrent rollout is missing pre-action hidden states")
+        if self.num_envs % num_mini_batches != 0:
+            raise ValueError(
+                "num_envs must be divisible by recurrent num_mini_batches")
+        envs_per_batch = self.num_envs // num_mini_batches
+        episode_starts = torch.zeros_like(self.dones, dtype=torch.bool)
+        episode_starts[1:] = self.dones[:-1].to(torch.bool)
+
+        for _ in range(num_epochs):
+            environment_order = torch.randperm(
+                self.num_envs, device=self.device)
+            for batch_index in range(num_mini_batches):
+                start = batch_index * envs_per_batch
+                end = start + envs_per_batch
+                env_ids = environment_order[start:end]
+                masks = {
+                    "image_update_mask": self.image_update_mask[:, env_ids],
+                    "episode_starts": episode_starts[:, env_ids],
+                }
+                yield (
+                    self.observations[:, env_ids],
+                    self.observations[:, env_ids],
+                    self.actions[:, env_ids],
+                    self.values[:, env_ids],
+                    self.advantages[:, env_ids],
+                    self.returns[:, env_ids],
+                    self.actions_log_prob[:, env_ids],
+                    self.mu[:, env_ids],
+                    self.sigma[:, env_ids],
+                    (self.saved_hidden_states_a[0, env_ids], None),
+                    masks,
+                    self.privileged_info[:, env_ids],
+                    self.proprio_hist[:, env_ids],
+                    self.image_buf[:, env_ids],
+                    self.next_observations[:, env_ids],
+                )
 
     def reccurent_mini_batch_generator1(self, num_mini_batches, num_epochs=8):
 

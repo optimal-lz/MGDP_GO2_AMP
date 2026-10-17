@@ -67,7 +67,9 @@ class PPO:
 
     def act(self, obs_dict):
         if self.actor_critic.is_recurrent:
-            self.transition.hidden_states = self.actor_critic.get_hidden_states()
+            self.actor_critic.ensure_hidden_state(obs_dict['image_buf'])
+            self.transition.hidden_states = (
+                self.actor_critic.get_hidden_states().detach().clone())
         # Compute the actions and values
         self.transition.actions = self.actor_critic.act(obs_dict).detach()
         self.transition.values = self.actor_critic.evaluate(obs_dict)[0].detach()
@@ -86,6 +88,11 @@ class PPO:
 
         # For image info
         self.transition.image_buf = obs_dict['image_buf']
+        self.transition.image_update_mask = obs_dict.get(
+            'image_update_mask', torch.ones(
+                obs_dict['image_buf'].shape[0], 1,
+                device=obs_dict['image_buf'].device,
+                dtype=torch.bool)).detach().clone()
 
         return self.transition.actions
 
@@ -118,7 +125,8 @@ class PPO:
         mean_cnn_loss = 0
 
         if self.actor_critic.is_recurrent:
-            generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+            generator = self.storage.recurrent_mini_batch_generator(
+                self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         for (obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch,
@@ -131,6 +139,12 @@ class PPO:
                 'privileged_info': privileged_info_batch,
                 'proprio_hist': proprio_hist_batch,
                 'image_buf': image_buf_batch,
+                'image_update_mask': (
+                    masks_batch['image_update_mask']
+                    if masks_batch is not None else None),
+                'episode_starts': (
+                    masks_batch['episode_starts']
+                    if masks_batch is not None else None),
             }
 
             self.actor_critic.act(obs_dict_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
@@ -160,9 +174,10 @@ class PPO:
                         param_group['lr'] = self.learning_rate
 
             # Surrogate loss
-            ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
-            surrogate = -torch.squeeze(advantages_batch) * ratio
-            surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(ratio, 1.0 - self.clip_param,
+            ratio = torch.exp(
+                actions_log_prob_batch - old_actions_log_prob_batch.squeeze(-1))
+            surrogate = -advantages_batch.squeeze(-1) * ratio
+            surrogate_clipped = -advantages_batch.squeeze(-1) * torch.clamp(ratio, 1.0 - self.clip_param,
                                                                                1.0 + self.clip_param)
             surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
@@ -180,16 +195,24 @@ class PPO:
 
             proprioceptive_token, visual_tokens_height, visual_tokens_image = extrin[0], extrin[1], extrin[2]
 
-            if proprioceptive_token.shape[1] == 3:
-                vel_loss = F.mse_loss(proprioceptive_token[:, 0:3], privileged_info_batch[:, 0:3].detach())
+            if proprioceptive_token.shape[-1] == 3:
+                vel_loss = F.mse_loss(
+                    proprioceptive_token[..., 0:3],
+                    privileged_info_batch[..., 0:3].detach())
                 feet_loss = 0
                 mean_vel_loss += vel_loss.item()
                 mean_feet_loss = 0
-            if proprioceptive_token.shape[1] == 7:
-                vel_loss = F.mse_loss(proprioceptive_token[:, 0:3], privileged_info_batch[:, 0:3].detach())
-                feet_loss = F.mse_loss(proprioceptive_token[:, 3:], privileged_info_batch[:, 3:7].detach())
+            elif proprioceptive_token.shape[-1] == 7:
+                vel_loss = F.mse_loss(
+                    proprioceptive_token[..., 0:3],
+                    privileged_info_batch[..., 0:3].detach())
+                feet_loss = F.mse_loss(
+                    proprioceptive_token[..., 3:],
+                    privileged_info_batch[..., 3:7].detach())
                 mean_vel_loss += vel_loss.item()
                 mean_feet_loss += feet_loss.item()
+            else:
+                raise ValueError("unsupported proprioceptive token width")
 
 
             loss_encoder = vel_loss + feet_loss

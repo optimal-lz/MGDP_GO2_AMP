@@ -42,6 +42,8 @@ class Go2AmpCfg(RandomCfgStage1):
         normalize = True
         mount_translation_jitter = 0.02
         mount_pitch_jitter_deg = 2.0
+        # Temporal fusion is policy state trained by PPO, not WM state.
+        use_memory = False
 
     class terrain(RandomCfgStage1.terrain):
         mesh_type = "mix"
@@ -166,6 +168,7 @@ class Go2AmpTrainCfg(RandomCfgPPOStage1):
         actor_hidden_dims = [512, 256, 128]
         critic_hidden_dims = [512, 256, 128]
         activation = "elu"
+        use_visual_memory = True
 
     class algorithm(RandomCfgPPOStage1.algorithm):
         value_loss_coef = 1.0

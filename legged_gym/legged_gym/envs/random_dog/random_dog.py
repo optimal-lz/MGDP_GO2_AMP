@@ -149,6 +149,9 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
             )
         else:
             self.image_buf = None
+        self.image_update_mask = torch.zeros(
+            self.num_envs, 1, device=self.device, dtype=torch.bool)
+        self.obs_dict['image_update_mask'] = self.image_update_mask
 
         if (self.use_camera or self.use_lidar) and self.cfg.camera.camera_type == 'warp':
             from warp_sensor import WarpManager, Config as WarpConfig
@@ -379,6 +382,8 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                 self.obs_dict['image_buf'] = visual_token.to(self.device).detach()
         else:
             self.obs_dict['image_buf'] = self.image_buf.to(self.device).detach()
+        self.image_update_mask.fill_(True)
+        self.obs_dict['image_update_mask'] = self.image_update_mask
 
     @staticmethod
     def depth_to_vis_uint8(img, stretch_low_contrast=True, vmin=None, vmax=None):
@@ -712,6 +717,8 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
         """
         super().compute_observations()
         if self.use_camera:
+            self.image_update_mask.zero_()
+            self.obs_dict['image_update_mask'] = self.image_update_mask
             if self.global_counter % self.cfg.camera.update_interval == 0:
                 self.get_camera_sensor()
             elif self.use_world_model:
@@ -736,6 +743,8 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                 self.obs_dict['image_buf'] = visual_token.to(self.device).detach()
             else:
                 self.obs_dict['image_buf'] = self.image_buf.to(self.device).detach()
+            self.image_update_mask.zero_()
+            self.obs_dict['image_update_mask'] = self.image_update_mask
         else:
             pass
         return self.obs_dict

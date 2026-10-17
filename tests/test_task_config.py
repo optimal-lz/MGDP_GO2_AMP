@@ -58,6 +58,7 @@ class TestGo2AmpTaskConfig(unittest.TestCase):
                            "wm_sensor_steps": 1, "wm_rollout_steps": 4,
                            "noise_gaussian": 0.03, "noise_dropout": 0.1}.items():
             self.assertEqual(camera[key], value)
+        self.assertIs(camera["use_memory"], False)
         domain = assignments(find_class(env_cfg, "domain_rand"))
         self.assertEqual(domain["friction_range"], [0.5, 1.25])
         self.assertEqual(domain["latency_range"], [0.0, 0.02])
@@ -103,6 +104,8 @@ class TestGo2AmpTaskConfig(unittest.TestCase):
         self.assertEqual(runner["amp_replay_rollouts"], 2)
         self.assertEqual(runner["save_interval"], 1000)
         self.assertEqual(assignments(find_class(train_cfg, "amp"))["reward_coef"], 0.01)
+        policy = assignments(find_class(train_cfg, "policy"))
+        self.assertIs(policy["use_visual_memory"], True)
 
 if __name__ == "__main__":
     unittest.main()

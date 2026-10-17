@@ -22,6 +22,12 @@ class ActorCritic(nn.Module):
         proprio_dim = kwargs['MLPModule_info']['hidden_dims'][2]
         camera_dim = kwargs.get('CNNModule_info', {}).get('output_channels', 64)
         privileged_dim = 194
+        self.use_visual_memory = bool(kwargs.get('use_visual_memory', False))
+        self.is_recurrent = self.use_visual_memory
+        self.visual_hidden_state = None
+        self.visual_gru = (
+            nn.GRUCell(camera_dim, camera_dim)
+            if self.use_visual_memory else None)
 
         self.num_actor_input = num_obs + camera_dim + proprio_dim
         self.num_critic_input = num_obs + privileged_dim
@@ -73,7 +79,29 @@ class ActorCritic(nn.Module):
          enumerate(mod for mod in sequential if isinstance(mod, nn.Linear))]
 
     def reset(self, dones=None):
-        pass
+        if self.visual_hidden_state is None:
+            return
+        if dones is None:
+            self.visual_hidden_state.zero_()
+            return
+        done_mask = dones.to(
+            device=self.visual_hidden_state.device, dtype=torch.bool).view(-1)
+        self.visual_hidden_state[done_mask] = 0.0
+
+    def ensure_hidden_state(self, visual_token):
+        """Allocate rollout memory before its pre-action state is recorded."""
+        if not self.use_visual_memory:
+            return None
+        batch_size = visual_token.shape[-2]
+        if (self.visual_hidden_state is None
+                or self.visual_hidden_state.shape[0] != batch_size
+                or self.visual_hidden_state.device != visual_token.device):
+            self.visual_hidden_state = visual_token.new_zeros(
+                batch_size, visual_token.shape[-1])
+        return self.visual_hidden_state
+
+    def get_hidden_states(self):
+        return self.visual_hidden_state
 
     def forward(self):
         raise NotImplementedError
@@ -92,7 +120,7 @@ class ActorCritic(nn.Module):
 
     def act(self, obs_dict, **kwargs):
         # self.update_distribution(observations)
-        mean, std, _, e = self._actor_critic(obs_dict)
+        mean, std, _, e = self._actor_critic(obs_dict, **kwargs)
 
         self.distribution = Normal(mean, mean * 0. + std)
         return self.distribution.sample()
@@ -107,13 +135,67 @@ class ActorCritic(nn.Module):
         return actions_mean
 
     def evaluate(self, obs_dict, **kwargs):
-        _, _, value, extrin = self._actor_critic(obs_dict)
-        return value, extrin
+        value = self.critic(self.build_critic_input(obs_dict))
+        proprioceptive_token = self.mlp_encoder(obs_dict['proprio_hist'])
+        visual_token = obs_dict['image_buf'].detach()
+        return value, [
+            proprioceptive_token,
+            visual_token[..., 0:32],
+            visual_token[..., 32:],
+        ]
 
-    def build_actor_input(self, obs_dict, return_tokens=False):
+    def _visual_memory(self, visual_token, image_update_mask,
+                       hidden_states=None, episode_starts=None):
+        """Apply the PPO-owned GRU only on genuine depth refreshes."""
+        if not self.use_visual_memory:
+            return visual_token
+
+        is_sequence = visual_token.dim() == 3
+        if not is_sequence:
+            self.ensure_hidden_state(visual_token)
+            hidden = (self.visual_hidden_state if hidden_states is None
+                      else hidden_states)
+            if episode_starts is not None:
+                start = episode_starts.to(torch.bool).view(-1, 1)
+                hidden = torch.where(start, torch.zeros_like(hidden), hidden)
+            candidate = self.visual_gru(visual_token, hidden)
+            refresh = image_update_mask.to(torch.bool).view(-1, 1)
+            hidden = torch.where(refresh, candidate, hidden)
+            if hidden_states is None:
+                self.visual_hidden_state = hidden.detach()
+            return hidden
+
+        time_steps, batch_size, hidden_size = visual_token.shape
+        hidden = (visual_token.new_zeros(batch_size, hidden_size)
+                  if hidden_states is None else hidden_states)
+        outputs = []
+        for step in range(time_steps):
+            if episode_starts is not None:
+                start = episode_starts[step].to(torch.bool).view(-1, 1)
+                hidden = torch.where(start, torch.zeros_like(hidden), hidden)
+            candidate = self.visual_gru(visual_token[step], hidden)
+            refresh = image_update_mask[step].to(torch.bool).view(-1, 1)
+            hidden = torch.where(refresh, candidate, hidden)
+            outputs.append(hidden)
+        return torch.stack(outputs, dim=0)
+
+    def build_actor_input(self, obs_dict, return_tokens=False,
+                          hidden_states=None, masks=None):
         """Build deployable Actor input and stop gradients at the WM boundary."""
         proprioceptive_token = self.mlp_encoder(obs_dict['proprio_hist'])
         visual_token = obs_dict['image_buf'].detach()
+        image_update_mask = obs_dict.get('image_update_mask')
+        if image_update_mask is None:
+            image_update_mask = torch.ones(
+                *visual_token.shape[:-1], 1, device=visual_token.device,
+                dtype=torch.bool)
+        episode_starts = obs_dict.get('episode_starts')
+        if masks is not None:
+            image_update_mask = masks.get(
+                'image_update_mask', image_update_mask)
+            episode_starts = masks.get('episode_starts', episode_starts)
+        visual_token = self._visual_memory(
+            visual_token, image_update_mask, hidden_states, episode_starts)
         actor_obs = torch.cat(
             [obs_dict['obs'], proprioceptive_token, visual_token], dim=-1)
         if return_tokens:
@@ -132,8 +214,10 @@ class ActorCritic(nn.Module):
             [obs_dict['obs'], obs_dict['privileged_info']], dim=-1)
 
 
-    def _actor_critic(self, obs_dict):
-        actor_obs, extrin = self.build_actor_input(obs_dict, return_tokens=True)
+    def _actor_critic(self, obs_dict, hidden_states=None, masks=None):
+        actor_obs, extrin = self.build_actor_input(
+            obs_dict, return_tokens=True, hidden_states=hidden_states,
+            masks=masks)
         critic_obs = self.build_critic_input(obs_dict)
 
         mu = self.actor(actor_obs)
