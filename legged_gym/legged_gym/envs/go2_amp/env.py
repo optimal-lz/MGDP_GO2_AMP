@@ -133,7 +133,8 @@ class Go2AmpRandomDog(Randomdog):
         self.command_epoch[env_ids] += 1
 
     def _update_terrain_curriculum(self, env_ids):
-        if not self.init_done or env_ids.numel() == 0:
+        if (getattr(self, "_suppress_curriculum", False)
+                or not self.init_done or env_ids.numel() == 0):
             return
         displacement = (self.root_states[env_ids, :2]
                         - self.episode_start_position[env_ids, :2])
@@ -304,6 +305,32 @@ class Go2AmpRandomDog(Randomdog):
         if getattr(self, "image_clean_buf", None) is not None:
             self.image_clean_buf[env_ids] = 0.0
 
+    def refresh_reset_state(self, env_ids):
+        """Remove terminal-state leakage before reset observations are built."""
+        if env_ids.numel() == 0:
+            return
+        self.base_quat[env_ids] = self.root_states[env_ids, 3:7]
+        self.base_lin_vel[env_ids] = quat_rotate_inverse(
+            self.base_quat[env_ids], self.root_states[env_ids, 7:10])
+        self.base_ang_vel[env_ids] = quat_rotate_inverse(
+            self.base_quat[env_ids], self.root_states[env_ids, 10:13])
+        self.projected_gravity[env_ids] = quat_rotate_inverse(
+            self.base_quat[env_ids], self.gravity_vec[env_ids])
+        if self.cfg.terrain.measure_heights:
+            reset_heights = self._get_heights(env_ids)
+            if torch.is_tensor(self.measured_heights):
+                self.measured_heights[env_ids] = reset_heights
+            elif env_ids.numel() == self.num_envs:
+                self.measured_heights = reset_heights
+        if torch.is_tensor(getattr(self, "foot_height", None)):
+            self.foot_height[env_ids] = 0.0
+        cached_visual = self.obs_dict.get('image_buf', None)
+        if torch.is_tensor(cached_visual):
+            self.obs_dict['image_buf'][env_ids] = 0.0
+        if hasattr(self, "image_update_mask"):
+            self.image_update_mask[env_ids] = False
+            self.obs_dict['image_update_mask'] = self.image_update_mask
+
     def reset_idx(self, env_ids):
         terminal_packet = None
         terminal_diagnostics = None
@@ -326,10 +353,27 @@ class Go2AmpRandomDog(Randomdog):
         super().reset_idx(env_ids)
         if env_ids.numel() > 0:
             self._reset_amp_histories(env_ids)
+            self.refresh_reset_state(env_ids)
             self._amp_previous_state[env_ids] = (
                 self.get_amp_observations()[env_ids].clone())
             self.extras["terminal_amp_states"] = terminal_packet
             self.extras["terminal_diagnostics"] = terminal_diagnostics
+
+    def restart_after_checkpoint_load(self):
+        """Start fresh episodes at restored curriculum levels and origins."""
+        previous_update_mode = getattr(
+            self, '_update_wm', self.cfg.camera.update_wm)
+        self._suppress_curriculum = True
+        self._update_wm = False
+        self.reset_buf[:] = True
+        try:
+            self.reset()
+            self.refresh_visual_observation()
+        finally:
+            self._update_wm = previous_update_mode
+            self._suppress_curriculum = False
+        self._amp_previous_state[:] = self.get_amp_observations().clone()
+        return self.obs_dict
 
     def step(self, actions):
         self.extras.pop("terminal_amp_states", None)

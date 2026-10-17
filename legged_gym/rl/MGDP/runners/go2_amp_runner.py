@@ -508,6 +508,8 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         if restore_training_state:
             self.load_state_dict(policy_state)
             self.load_world_model_state_dict(wm_state)
+            self.alg.actor_critic.reset()
+            self.env.restart_after_checkpoint_load()
         else:
             self.alg.actor_critic.load_state_dict(
                 policy_state["actor_state_dict"])

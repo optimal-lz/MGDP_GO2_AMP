@@ -730,6 +730,19 @@ class Randomdog(CameraMixin, Legged_terrains, Legged_camera, Legged_rewards, Leg
                 self.height_visual_mse_loss = torch.tensor(0.0, device=self.device)
                 self.total_wm_loss = torch.tensor(0.0, device=self.device)
 
+    def refresh_visual_observation(self):
+        """Force one sensor/WM inference refresh without an optimizer step."""
+        if not self.use_camera:
+            return self.obs_dict.get('image_buf', None)
+        previous_update_mode = getattr(
+            self, '_update_wm', self.cfg.camera.update_wm)
+        self._update_wm = False
+        try:
+            self.get_camera_sensor()
+        finally:
+            self._update_wm = previous_update_mode
+        return self.obs_dict.get('image_buf', None)
+
     def reset(self):
         super().reset()
         if self.use_memory:

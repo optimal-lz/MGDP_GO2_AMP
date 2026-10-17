@@ -190,16 +190,19 @@ class Legged_terrains(LeggedRobot):
             [type]: [description]
         """
         if self.cfg.terrain.mesh_type == 'plane':
-            return torch.zeros(self.num_envs, self.num_height_points, device=self.device, requires_grad=False)
+            count = self.num_envs if env_ids is None else len(env_ids)
+            return torch.zeros(count, self.num_height_points, device=self.device, requires_grad=False)
         elif self.cfg.terrain.mesh_type == 'none':
             raise NameError("Can't measure height with terrain meshes type 'none'")
 
-        if env_ids:
+        if env_ids is not None:
             points = quat_apply_yaw(self.base_quat[env_ids].repeat(1, self.num_height_points),
                                     self.height_points[env_ids]) + (self.root_states[env_ids, :3]).unsqueeze(1)
+            count = len(env_ids)
         else:
             points = quat_apply_yaw(self.base_quat.repeat(1, self.num_height_points), self.height_points) + (
                 self.root_states[:, :3]).unsqueeze(1)
+            count = self.num_envs
 
         points += self.terrain.cfg.border_size
         points = (points / self.terrain.cfg.horizontal_scale).long()
@@ -214,7 +217,7 @@ class Legged_terrains(LeggedRobot):
         heights = torch.min(heights1, heights2)
         heights = torch.min(heights, heights3)
 
-        real_height = heights.view(self.num_envs, -1) * self.terrain.cfg.vertical_scale
+        real_height = heights.view(count, -1) * self.terrain.cfg.vertical_scale
 
         return real_height
 

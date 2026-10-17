@@ -56,6 +56,26 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
         self.assertNotIn("reference", reset.lower())
         self.assertNotIn("rsi", reset.lower())
 
+    def test_reset_refreshes_derived_state_and_clears_visual_cache(self):
+        self.assertIn("refresh_reset_state", self.methods)
+        refresh = self.methods["refresh_reset_state"]
+        for required in (
+                "self.base_quat[env_ids]", "self.base_lin_vel[env_ids]",
+                "self.base_ang_vel[env_ids]",
+                "self.projected_gravity[env_ids]", "self._get_heights(env_ids)",
+                "self.obs_dict['image_buf'][env_ids] = 0.0",
+                "self.image_update_mask[env_ids] = False"):
+            self.assertIn(required, refresh)
+        self.assertIn("refresh_reset_state", self.methods["reset_idx"])
+
+    def test_checkpoint_restart_suppresses_curriculum_and_forces_visual_refresh(self):
+        self.assertIn("restart_after_checkpoint_load", self.methods)
+        restart = self.methods["restart_after_checkpoint_load"]
+        self.assertIn("_suppress_curriculum", restart)
+        self.assertIn("self.reset()", restart)
+        self.assertIn("refresh_visual_observation", restart)
+        self.assertIn("_suppress_curriculum", self.methods["_update_terrain_curriculum"])
+
     def test_curriculum_has_no_anchor_stage_or_unlock(self):
         source = self.methods["_update_terrain_curriculum"]
         self.assertIn("next_curriculum_levels", source)

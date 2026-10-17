@@ -133,6 +133,15 @@ class TestGo2AmpRandomization(unittest.TestCase):
         self.assertIn("randomize_motor_strength", dog_source)
         self.assertIn("camera_mount_ranges", dog_source)
 
+    def test_subset_height_sampling_uses_explicit_ids_and_subset_shape(self):
+        source = TERRAINS.read_text(encoding="utf-8")
+        start = source.index("def _get_heights")
+        end = source.index("def compute_observations", start)
+        method = source[start:end]
+        self.assertIn("env_ids is not None", method)
+        self.assertIn("len(env_ids)", method)
+        self.assertNotIn("if env_ids:", method)
+
 
 if __name__ == "__main__":
     unittest.main()

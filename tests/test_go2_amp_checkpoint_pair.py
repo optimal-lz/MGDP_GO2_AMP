@@ -173,10 +173,21 @@ class TestPairedCheckpointManager(unittest.TestCase):
                 '"ppo_learning_rate"', "restore_ppo_learning_rate",
                 "validate_terrain_state", "restore_terrain_state"):
             self.assertIn(required, source)
+        self.assertIn("restart_after_checkpoint_load", source)
+        self.assertIn("actor_critic.reset()", source)
         self.assertIn('if self.amp is not None:', source)
         validation = source[source.index("def _validate_policy_state"):
                             source.index("def load_state_dict")]
         self.assertIn("validate_terrain_state", validation)
+
+    def test_resume_restarts_only_after_policy_and_world_model_load(self):
+        source = RUNNER_PATH.read_text(encoding="utf-8")
+        load_pair = source[source.index("def load_pair"):
+                           source.index("def get_inference_policy")]
+        self.assertLess(load_pair.index("self.load_state_dict(policy_state)"),
+                        load_pair.index("self.load_world_model_state_dict(wm_state)"))
+        self.assertLess(load_pair.index("self.load_world_model_state_dict(wm_state)"),
+                        load_pair.index("restart_after_checkpoint_load"))
 
     def test_adaptive_learning_rate_is_restored_into_scalar_and_optimizer(self):
         optimizer = SimpleNamespace(param_groups=[{"lr": 1e-3}, {"lr": 1e-3}])
