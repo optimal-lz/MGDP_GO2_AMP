@@ -103,6 +103,17 @@ class TestGo2AmpRunnerSource(unittest.TestCase):
         self.assertIn("expert_forward_logit", source)
         self.assertIn("expert_turn_logit", source)
 
+    def test_runner_prints_validated_iteration_panel_immediately(self):
+        learn = self.methods["learn"]
+        self.assertIn("format_iteration_console", self.source)
+        self.assertIn("scalars = self.iteration_metrics.write", learn)
+        self.assertIn("session_time", learn)
+        self.assertIn("flush=True", learn)
+        self.assertLess(
+            learn.index("self.iteration_metrics.write"),
+            learn.index("format_iteration_console"),
+        )
+
 
 @unittest.skipUnless(HAS_TORCH, "PyTorch is tested on the training host")
 class TestRecurrentRolloutStorage(unittest.TestCase):

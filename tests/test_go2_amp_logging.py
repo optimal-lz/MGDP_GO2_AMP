@@ -10,11 +10,15 @@ RUNNER_PATH = ROOT / "legged_gym/rl/MGDP/runners/go2_amp_runner.py"
 RANDOM_DOG_PATH = ROOT / "legged_gym/legged_gym/envs/random_dog/random_dog.py"
 
 
-def load_logger():
+def load_logging_module():
     spec = importlib.util.spec_from_file_location("go2_amp_logging", PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.IterationMetrics
+    return module
+
+
+def load_logger():
+    return load_logging_module().IterationMetrics
 
 
 CORE = {
@@ -90,8 +94,10 @@ class TestGo2AmpLogging(unittest.TestCase):
     def test_core_once_per_iteration_and_detail_every_ten(self):
         metrics = load_logger()(Writer(), mode="amp", terrain_names=("flat",))
         core = {**CORE, **AMP_CORE}
-        metrics.write(1, core, DETAIL)
+        scalars = metrics.write(1, core, DETAIL)
         metrics.write(10, core, DETAIL)
+        self.assertEqual(scalars["reward/task"], 1.0)
+        self.assertNotIn("terrain/flat/mean_level", scalars)
         calls = metrics.writer.scalars
         self.assertEqual(sum(tag == "reward/task" for tag, _, _ in calls), 2)
         self.assertEqual(
@@ -127,6 +133,63 @@ class TestGo2AmpLogging(unittest.TestCase):
             metrics.write(1, {"reward/task": 1.0})
         with self.assertRaisesRegex(ValueError, "missing detail"):
             metrics.write(10, {**CORE, **AMP_CORE}, {})
+
+    def test_amp_console_panel_keeps_mgdp_layout_with_v1_metrics(self):
+        formatter = load_logging_module().format_iteration_console
+        panel = formatter(
+            mode="amp",
+            completed_iteration=5,
+            target_iteration=20,
+            total_timesteps=7680,
+            iteration_timesteps=1536,
+            elapsed_seconds=4.8,
+            eta_seconds=14.4,
+            timings={
+                "rollout": 0.7,
+                "world_model": 0.1,
+                "ppo": 0.3,
+                "discriminator": 0.1,
+            },
+            learning_rate=3e-4,
+            metrics={**CORE, **AMP_CORE},
+        )
+
+        self.assertIn("#" * 88, panel)
+        self.assertIn("MGDP GO2 AMP - Learning iteration 5/20", panel)
+        self.assertIn("Mode: AMP", panel)
+        for label in (
+                "Computation:", "Rollout / WM / PPO / D:",
+                "Mean task reward/step:", "Mean |vx error|:",
+                "World model total loss:", "Value function loss:",
+                "AMP policy logit:", "Valid AMP transitions:",
+                "Total timesteps:", "ETA:"):
+            self.assertIn(label, panel)
+        self.assertNotIn("Mean episode rew_", panel)
+        self.assertNotIn("\x1b", panel)
+        self.assertLessEqual(max(map(len, panel.splitlines())), 88)
+
+    def test_noamp_console_panel_omits_discriminator_training(self):
+        formatter = load_logging_module().format_iteration_console
+        panel = formatter(
+            mode="no_amp",
+            completed_iteration=1,
+            target_iteration=10,
+            total_timesteps=1536,
+            iteration_timesteps=1536,
+            elapsed_seconds=1.2,
+            eta_seconds=10.8,
+            timings={"rollout": 0.8, "world_model": 0.1, "ppo": 0.3},
+            learning_rate=3e-4,
+            metrics={**CORE, "reward/amp_contribution": 0.0},
+        )
+
+        self.assertIn("Mode: noAMP", panel)
+        self.assertIn("Mean AMP contribution/step:", panel)
+        self.assertIn("0.00000", panel)
+        self.assertNotIn("Rollout / WM / PPO / D:", panel)
+        self.assertNotIn("AMP policy logit:", panel)
+        self.assertNotIn("Discriminator loss:", panel)
+        self.assertLessEqual(max(map(len, panel.splitlines())), 88)
 
 
 if __name__ == "__main__":

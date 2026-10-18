@@ -46,6 +46,170 @@ AMP_DETAIL_TAGS = frozenset({
     "amp/expert_turn_logit",
 })
 
+CONSOLE_WIDTH = 88
+CONSOLE_LABEL_WIDTH = 42
+
+
+def _console_scalar(name, value):
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError("console value {!r} must be finite".format(name))
+    return value
+
+
+def _console_line(label, value):
+    return "{label:>{width}} {value}".format(
+        label=label + ":", width=CONSOLE_LABEL_WIDTH, value=value)
+
+
+def _format_duration(seconds):
+    seconds = max(0.0, _console_scalar("duration", seconds))
+    if seconds < 60.0:
+        return "{:.1f}s".format(seconds)
+    if seconds < 3600.0:
+        minutes = int(seconds // 60.0)
+        return "{}m {:.1f}s".format(minutes, seconds - minutes * 60.0)
+    hours = int(seconds // 3600.0)
+    minutes = int((seconds - hours * 3600.0) // 60.0)
+    remaining = seconds - hours * 3600.0 - minutes * 60.0
+    return "{}h {:02d}m {:02.0f}s".format(hours, minutes, remaining)
+
+
+def format_iteration_console(mode, completed_iteration, target_iteration,
+                             total_timesteps, iteration_timesteps,
+                             elapsed_seconds, eta_seconds, timings,
+                             learning_rate, metrics):
+    """Format one MGDP-style console panel from validated V1 scalars."""
+    if mode not in ("amp", "no_amp"):
+        raise ValueError("mode must be 'amp' or 'no_amp'")
+    completed_iteration = int(completed_iteration)
+    target_iteration = int(target_iteration)
+    if not 0 < completed_iteration <= target_iteration:
+        raise ValueError("completed iteration must be inside the target range")
+
+    required_timings = {"rollout", "world_model", "ppo"}
+    if mode == "amp":
+        required_timings.add("discriminator")
+    missing_timings = required_timings.difference(timings)
+    if missing_timings:
+        raise ValueError(
+            "missing console timings: {}".format(sorted(missing_timings)))
+    timing = {
+        name: _console_scalar(name, timings[name])
+        for name in required_timings
+    }
+    learning_rate = _console_scalar("learning_rate", learning_rate)
+    iteration_seconds = _console_scalar(
+        "performance/iteration_seconds",
+        metrics["performance/iteration_seconds"],
+    )
+    steps_per_second = int(
+        int(iteration_timesteps) / iteration_seconds
+        if iteration_seconds > 0.0 else 0)
+
+    mode_label = "AMP" if mode == "amp" else "noAMP"
+    lines = [
+        "#" * CONSOLE_WIDTH,
+        ("MGDP GO2 AMP - Learning iteration {}/{}".format(
+            completed_iteration, target_iteration)).center(CONSOLE_WIDTH),
+        ("Mode: {}".format(mode_label)).center(CONSOLE_WIDTH),
+        "",
+        _console_line("Computation", "{} steps/s".format(steps_per_second)),
+    ]
+    timing_values = "{:.3f}s / {:.3f}s / {:.3f}s".format(
+        timing["rollout"], timing["world_model"], timing["ppo"])
+    timing_label = "Rollout / WM / PPO"
+    if mode == "amp":
+        timing_label += " / D"
+        timing_values += " / {:.3f}s".format(timing["discriminator"])
+    lines.extend([
+        _console_line(timing_label, timing_values),
+        _console_line(
+            "Value function loss",
+            "{:.5f}".format(metrics["ppo/value_loss"])),
+        _console_line(
+            "Surrogate loss",
+            "{:.5f}".format(metrics["ppo/surrogate_loss"])),
+        _console_line("PPO KL", "{:.6f}".format(metrics["ppo/kl"])),
+        _console_line(
+            "PPO entropy", "{:.5f}".format(metrics["ppo/entropy"])),
+        _console_line("Learning rate", "{:.6f}".format(learning_rate)),
+        _console_line(
+            "Mean action noise std",
+            "{:.3f}".format(metrics["policy/action_std"])),
+        "",
+        _console_line(
+            "Mean task reward/step",
+            "{:.5f}".format(metrics["reward/task"])),
+        _console_line(
+            "Mean regularization reward/step",
+            "{:.5f}".format(metrics["reward/regularization"])),
+        _console_line(
+            "Mean AMP contribution/step",
+            "{:.5f}".format(metrics["reward/amp_contribution"])),
+        _console_line(
+            "Mean total reward/step",
+            "{:.5f}".format(metrics["reward/total"])),
+        _console_line(
+            "Mean |vx error|",
+            "{:.5f}".format(metrics["tracking/vx_error"])),
+        _console_line(
+            "Mean |yaw error|",
+            "{:.5f}".format(metrics["tracking/yaw_error"])),
+        _console_line(
+            "Mean episode length",
+            "{:.2f}s".format(metrics["episode/length"])),
+        _console_line(
+            "Base-contact failure rate",
+            "{:.5f}".format(metrics["episode/base_contact_failure"])),
+        _console_line(
+            "Mean terrain level",
+            "{:.2f}".format(metrics["terrain/mean_level"])),
+        "",
+        _console_line(
+            "World model total loss",
+            "{:.5f}".format(metrics["wm/total_loss"])),
+        _console_line(
+            "Depth reconstruction loss",
+            "{:.5f}".format(metrics["wm/depth_loss"])),
+        _console_line(
+            "Height reconstruction loss",
+            "{:.5f}".format(metrics["wm/height_loss"])),
+        _console_line(
+            "Contrastive loss",
+            "{:.5f}".format(metrics["wm/contrastive_loss"])),
+    ])
+    if mode == "amp":
+        lines.extend([
+            "",
+            _console_line(
+                "AMP policy logit",
+                "{:.5f}".format(metrics["amp/policy_logit"])),
+            _console_line(
+                "AMP expert logit",
+                "{:.5f}".format(metrics["amp/expert_logit"])),
+            _console_line(
+                "Discriminator loss",
+                "{:.5f}".format(metrics["amp/discriminator_loss"])),
+            _console_line(
+                "Gradient penalty",
+                "{:.5f}".format(metrics["amp/gradient_penalty"])),
+            _console_line(
+                "Valid AMP transitions",
+                "{:.0f}".format(metrics["amp/valid_transition_count"])),
+            _console_line(
+                "Replay fill",
+                "{:.3f}".format(metrics["amp/replay_fill"])),
+        ])
+    lines.extend([
+        "-" * CONSOLE_WIDTH,
+        _console_line("Total timesteps", str(int(total_timesteps))),
+        _console_line("Iteration time", "{:.2f}s".format(iteration_seconds)),
+        _console_line("Total time", _format_duration(elapsed_seconds)),
+        _console_line("ETA", _format_duration(eta_seconds)),
+    ])
+    return "\n".join(lines)
+
 
 class IterationMetrics:
     """Write one finite scalar set per monotonically increasing iteration."""
@@ -140,4 +304,5 @@ class IterationMetrics:
             for tag, value in scalars.items():
                 self.writer.add_scalar(tag, value, iteration)
         self.last_step = iteration
+        return scalars
 

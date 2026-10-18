@@ -21,7 +21,7 @@ from .go2_amp_checkpoint import (
     restore_terrain_state,
     validate_terrain_state,
 )
-from .go2_amp_logging import IterationMetrics
+from .go2_amp_logging import IterationMetrics, format_iteration_console
 from .policy_runner import MGDPPolicyRunner
 
 
@@ -196,6 +196,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         start_iteration = self.current_learning_iteration_init
         end_iteration = start_iteration + num_learning_iterations
         reward_history = deque(maxlen=100)
+        session_time = 0.0
 
         for iteration in range(start_iteration, end_iteration):
             iteration_start = time.time()
@@ -344,11 +345,37 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
                     "amp/expert_turn_logit": amp_update_metrics[
                         "expert_turn_logit"],
                 })
-            self.iteration_metrics.write(iteration, core, detail)
+            scalars = self.iteration_metrics.write(iteration, core, detail)
             completed_iteration = iteration + 1
             self.current_learning_iteration = completed_iteration
-            self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
+            iteration_timesteps = self.num_steps_per_env * self.env.num_envs
+            self.tot_timesteps += iteration_timesteps
             self.tot_time += iteration_time
+            session_time += iteration_time
+            session_iterations = completed_iteration - start_iteration
+            remaining_iterations = end_iteration - completed_iteration
+            eta_seconds = (
+                session_time / max(session_iterations, 1)
+                * remaining_iterations)
+            timings = {
+                "rollout": collection_time,
+                "world_model": wm_time,
+                "ppo": ppo_time,
+            }
+            if self.amp is not None:
+                timings["discriminator"] = discriminator_time
+            print(format_iteration_console(
+                mode=self.mode,
+                completed_iteration=completed_iteration,
+                target_iteration=end_iteration,
+                total_timesteps=completed_iteration * iteration_timesteps,
+                iteration_timesteps=iteration_timesteps,
+                elapsed_seconds=self.tot_time,
+                eta_seconds=eta_seconds,
+                timings=timings,
+                learning_rate=self.alg.learning_rate,
+                metrics=scalars,
+            ), flush=True)
             if (self.checkpoints is not None
                     and completed_iteration % self.save_interval == 0):
                 self.save_pair(completed_iteration)
