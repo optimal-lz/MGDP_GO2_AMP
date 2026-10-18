@@ -17,6 +17,7 @@ from legged_gym.envs.go2_amp.terrain import TERRAIN_NAMES
 from .go2_amp_checkpoint import (
     CheckpointCompatibility,
     PairedCheckpointManager,
+    prepare_torch_rng_restore,
     restore_ppo_learning_rate,
     restore_terrain_state,
     validate_terrain_state,
@@ -443,6 +444,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
 
     def load_state_dict(self, state):
         self._validate_policy_state(state, self.mode)
+        restore_torch_rng = prepare_torch_rng_restore(torch, state["rng"])
         self.alg.actor_critic.load_state_dict(state["actor_state_dict"])
         self.alg.optimizer.load_state_dict(state["optimizer_state_dict"])
         restore_ppo_learning_rate(self.alg, state["ppo_learning_rate"])
@@ -457,9 +459,7 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             raise ValueError("noAMP checkpoint cannot contain AMP state")
         random.setstate(state["rng"]["python"])
         np.random.set_state(state["rng"]["numpy"])
-        torch.random.set_rng_state(state["rng"]["torch"])
-        if state["rng"]["torch_cuda"] and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(state["rng"]["torch_cuda"])
+        restore_torch_rng()
         self.iteration_metrics.last_step = self.current_learning_iteration - 1
 
     def world_model_state_dict(self, iteration=None):

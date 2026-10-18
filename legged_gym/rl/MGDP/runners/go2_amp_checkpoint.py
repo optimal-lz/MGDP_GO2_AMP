@@ -29,6 +29,19 @@ def restore_ppo_learning_rate(algorithm, learning_rate):
         group["lr"] = learning_rate
 
 
+def prepare_torch_rng_restore(torch_module, rng):
+    """Normalize mapped RNG tensors before returning their restore action."""
+    torch_state = rng["torch"].cpu()
+    cuda_states = [state.cpu() for state in rng["torch_cuda"]]
+
+    def restore():
+        torch_module.random.set_rng_state(torch_state)
+        if cuda_states and torch_module.cuda.is_available():
+            torch_module.cuda.set_rng_state_all(cuda_states)
+
+    return restore
+
+
 def _copy_array(destination, source):
     if hasattr(destination, "copy_"):
         destination.copy_(source)

@@ -189,6 +189,11 @@ class TestPairedCheckpointManager(unittest.TestCase):
         self.assertLess(load_pair.index("self.load_world_model_state_dict(wm_state)"),
                         load_pair.index("restart_after_checkpoint_load"))
 
+        load_state = source[source.index("def load_state_dict"):
+                            source.index("def world_model_state_dict")]
+        self.assertLess(load_state.index("prepare_torch_rng_restore"),
+                        load_state.index("self.alg.actor_critic.load_state_dict"))
+
     def test_adaptive_learning_rate_is_restored_into_scalar_and_optimizer(self):
         optimizer = SimpleNamespace(param_groups=[{"lr": 1e-3}, {"lr": 1e-3}])
         algorithm = SimpleNamespace(learning_rate=1e-3, optimizer=optimizer)
@@ -199,6 +204,87 @@ class TestPairedCheckpointManager(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "learning rate"):
             self.module.restore_ppo_learning_rate(algorithm, float("nan"))
         self.assertEqual(algorithm.learning_rate, 2.5e-4)
+
+    def test_rng_restore_moves_map_location_tensors_back_to_cpu(self):
+        class MappedState:
+            def __init__(self, name):
+                self.name = name
+
+            def cpu(self):
+                return "cpu:" + self.name
+
+        class RandomApi:
+            def __init__(self):
+                self.state = None
+
+            def set_rng_state(self, state):
+                self.state = state
+
+        class CudaApi:
+            def __init__(self):
+                self.states = None
+
+            @staticmethod
+            def is_available():
+                return True
+
+            def set_rng_state_all(self, states):
+                self.states = states
+
+        torch_api = SimpleNamespace(random=RandomApi(), cuda=CudaApi())
+        rng = {
+            "torch": MappedState("torch"),
+            "torch_cuda": [MappedState("cuda0"), MappedState("cuda1")],
+        }
+
+        restore_rng = self.module.prepare_torch_rng_restore(torch_api, rng)
+
+        self.assertIsNone(torch_api.random.state)
+        self.assertIsNone(torch_api.cuda.states)
+        restore_rng()
+        self.assertEqual(torch_api.random.state, "cpu:torch")
+        self.assertEqual(torch_api.cuda.states, ["cpu:cuda0", "cpu:cuda1"])
+
+    def test_rng_restore_does_not_mutate_when_normalization_fails(self):
+        class MappedState:
+            def __init__(self, name, fail=False):
+                self.name = name
+                self.fail = fail
+
+            def cpu(self):
+                if self.fail:
+                    raise RuntimeError("cannot normalize " + self.name)
+                return "cpu:" + self.name
+
+        class RandomApi:
+            def __init__(self):
+                self.state = None
+
+            def set_rng_state(self, state):
+                self.state = state
+
+        class CudaApi:
+            def __init__(self):
+                self.states = None
+
+            @staticmethod
+            def is_available():
+                return True
+
+            def set_rng_state_all(self, states):
+                self.states = states
+
+        torch_api = SimpleNamespace(random=RandomApi(), cuda=CudaApi())
+        rng = {
+            "torch": MappedState("torch"),
+            "torch_cuda": [MappedState("cuda0", fail=True)],
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "cannot normalize cuda0"):
+            self.module.prepare_torch_rng_restore(torch_api, rng)
+
+        self.assertIsNone(torch_api.random.state)
+        self.assertIsNone(torch_api.cuda.states)
 
     def test_terrain_restore_updates_all_derived_environment_state(self):
         terrain_origins = np.arange(4 * 3 * 3).reshape(4, 3, 3)
