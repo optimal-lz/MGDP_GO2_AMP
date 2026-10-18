@@ -6,13 +6,13 @@ from isaacgym import gymtorch
 from isaacgym.torch_utils import (
     quat_rotate_inverse,
     torch_rand_float,
-    wrap_to_pi,
 )
 
 from legged_gym.envs.random_dog.random_dog import Randomdog
 from legged_gym.envs.baseline.randomization import (
     validate_training_randomization,
 )
+from legged_gym.utils.math import wrap_to_pi
 from rl.MGDP.amp.state import pack_amp_state, validate_go2_dofs
 from .commands import (
     amp_transition_mask,

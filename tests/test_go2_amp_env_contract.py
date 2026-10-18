@@ -14,11 +14,23 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
     def setUpClass(cls):
         cls.source = ENV_PATH.read_text(encoding="utf-8")
         tree = ast.parse(cls.source)
+        cls.imports = {
+            alias.name: node.module
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
         class_node = next(node for node in tree.body
                           if isinstance(node, ast.ClassDef)
                           and node.name == "Go2AmpRandomDog")
         cls.methods = {node.name: node_source(cls.source, node) for node in class_node.body
                        if isinstance(node, ast.FunctionDef)}
+
+    def test_wrap_to_pi_uses_shared_compatibility_helper(self):
+        self.assertEqual(
+            self.imports["wrap_to_pi"],
+            "legged_gym.utils.math",
+        )
 
     def test_commands_increment_epoch_apply_deadband_and_disable_structured_yaw(self):
         source = self.methods["_resample_commands"]
