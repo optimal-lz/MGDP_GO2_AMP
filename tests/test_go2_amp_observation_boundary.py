@@ -41,11 +41,15 @@ class TestObservationBoundarySource(unittest.TestCase):
 
     def test_actor_owns_refresh_gated_visual_memory(self):
         init = self.methods["__init__"]
+        reset = self.methods["reset"]
         self.assertIn("use_visual_memory", init)
         self.assertIn("visual_gru", init)
         self.assertIn("image_update_mask", self.methods["build_actor_input"])
         self.assertIn("visual_gru", self.methods["_visual_memory"])
-        self.assertIn("visual_hidden_state", self.methods["reset"])
+        self.assertIn("visual_hidden_state", reset)
+        self.assertIn("torch.where", reset)
+        self.assertNotIn("self.visual_hidden_state.zero_()", reset)
+        self.assertNotIn("self.visual_hidden_state[done_mask]", reset)
         self.assertIn("visual_token[..., 0:32]",
                       self.methods["build_actor_input"])
         self.assertIn("visual_token[..., 32:]",
@@ -144,7 +148,8 @@ class TestObservationBoundaryTensor(unittest.TestCase):
         import torch
         model = self._model(use_visual_memory=True)
         observations = self._observations(torch, batch=3)
-        model.act_inference(observations)
+        with torch.inference_mode():
+            model.act_inference(observations)
         before = model.get_hidden_states().clone()
         self.assertFalse(torch.equal(before, torch.zeros_like(before)))
         model.reset(torch.tensor([False, True, False]))

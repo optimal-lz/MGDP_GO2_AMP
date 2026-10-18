@@ -82,11 +82,16 @@ class ActorCritic(nn.Module):
         if self.visual_hidden_state is None:
             return
         if dones is None:
-            self.visual_hidden_state.zero_()
+            self.visual_hidden_state = torch.zeros_like(
+                self.visual_hidden_state)
             return
         done_mask = dones.to(
-            device=self.visual_hidden_state.device, dtype=torch.bool).view(-1)
-        self.visual_hidden_state[done_mask] = 0.0
+            device=self.visual_hidden_state.device, dtype=torch.bool).view(-1, 1)
+        self.visual_hidden_state = torch.where(
+            done_mask,
+            torch.zeros_like(self.visual_hidden_state),
+            self.visual_hidden_state,
+        )
 
     def ensure_hidden_state(self, visual_token):
         """Allocate rollout memory before its pre-action state is recorded."""
