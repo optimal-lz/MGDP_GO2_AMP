@@ -5,13 +5,16 @@ import unittest
 
 import numpy as np
 
+from tests.ast_source import node_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / "legged_gym/legged_gym/envs/go2_amp/env.py"
 
 
 def _load_reward_method(name):
-    tree = ast.parse(ENV_PATH.read_text(encoding="utf-8"))
+    source = ENV_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
     original = next(node for node in tree.body
                     if isinstance(node, ast.ClassDef)
                     and node.name == "Go2AmpRandomDog")
@@ -29,7 +32,7 @@ def _load_reward_method(name):
     ast.fix_missing_locations(module)
     namespace = {"torch": FakeTorch}
     exec(compile(module, str(ENV_PATH), "exec"), namespace)
-    return namespace["RewardHarness"], ast.unparse(method)
+    return namespace["RewardHarness"], node_source(source, method)
 
 
 class TestAmpReward(unittest.TestCase):

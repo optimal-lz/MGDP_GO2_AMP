@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import unittest
 
+from tests.ast_source import node_source
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "legged_gym"))
 HAS_TORCH = importlib.util.find_spec("torch") is not None
@@ -18,7 +20,7 @@ class TestAmpEnvironmentTransitionSource(unittest.TestCase):
         class_node = next(node for node in tree.body
                           if isinstance(node, ast.ClassDef)
                           and node.name == "Go2AmpRandomDog")
-        cls.methods = {node.name: ast.unparse(node) for node in class_node.body
+        cls.methods = {node.name: node_source(cls.source, node) for node in class_node.body
                        if isinstance(node, ast.FunctionDef)}
 
     def test_clean_state_order_is_validated_and_terminal_state_is_pre_reset(self):

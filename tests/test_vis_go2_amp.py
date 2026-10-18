@@ -2,6 +2,8 @@ import ast
 from pathlib import Path
 import unittest
 
+from tests.ast_source import node_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "legged_gym/scripts/vis_go2_amp.py"
@@ -14,7 +16,7 @@ class TestGo2AmpViewer(unittest.TestCase):
         cls.source = SCRIPT.read_text(encoding="utf-8") if SCRIPT.exists() else ""
         cls.tree = ast.parse(cls.source) if cls.source else ast.Module(body=[])
         cls.functions = {
-            node.name: ast.unparse(node) for node in cls.tree.body
+            node.name: node_source(cls.source, node) for node in cls.tree.body
             if isinstance(node, ast.FunctionDef)
         }
 

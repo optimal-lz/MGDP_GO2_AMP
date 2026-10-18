@@ -3,6 +3,8 @@ import importlib.util
 from pathlib import Path
 import unittest
 
+from tests.ast_source import node_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "legged_gym/rl/MGDP/runners/go2_amp_runner.py"
@@ -20,7 +22,7 @@ class TestGo2AmpRunnerSource(unittest.TestCase):
         tree = ast.parse(cls.source)
         runner = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                       and node.name == "Go2AmpPolicyRunner")
-        cls.methods = {node.name: ast.unparse(node) for node in runner.body
+        cls.methods = {node.name: node_source(cls.source, node) for node in runner.body
                        if isinstance(node, ast.FunctionDef)}
 
     def test_formal_runner_api_and_mode_split(self):

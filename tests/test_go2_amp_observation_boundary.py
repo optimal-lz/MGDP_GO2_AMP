@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import unittest
 
+from tests.ast_source import node_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "legged_gym"))
@@ -18,7 +20,7 @@ class TestObservationBoundarySource(unittest.TestCase):
         tree = ast.parse(source)
         actor = next(node for node in tree.body
                      if isinstance(node, ast.ClassDef) and node.name == "ActorCritic")
-        cls.methods = {node.name: ast.unparse(node) for node in actor.body
+        cls.methods = {node.name: node_source(source, node) for node in actor.body
                        if isinstance(node, ast.FunctionDef)}
         cls.source = source
 

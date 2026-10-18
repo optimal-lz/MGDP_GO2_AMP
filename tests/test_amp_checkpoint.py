@@ -6,6 +6,8 @@ import unittest
 
 import numpy as np
 
+from tests.ast_source import node_source
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "legged_gym"))
@@ -20,7 +22,7 @@ class TestSingleAmpSource(unittest.TestCase):
         discriminator = next(node for node in tree.body
                              if isinstance(node, ast.ClassDef)
                              and node.name == "AMPDiscriminator")
-        methods = {node.name: ast.unparse(node) for node in discriminator.body
+        methods = {node.name: node_source(source, node) for node in discriminator.body
                    if isinstance(node, ast.FunctionDef)}
         self.assertIn("hidden_dims=(1024, 512)", methods["__init__"])
         self.assertIn("nn.ReLU()", methods["__init__"])
@@ -33,7 +35,7 @@ class TestSingleAmpSource(unittest.TestCase):
         tree = ast.parse(source)
         session = next(node for node in tree.body
                        if isinstance(node, ast.ClassDef) and node.name == "AMPSession")
-        methods = {node.name: ast.unparse(node) for node in session.body
+        methods = {node.name: node_source(source, node) for node in session.body
                    if isinstance(node, ast.FunctionDef)}
         self.assertIn("amp_seed", methods["__init__"])
         self.assertIn("eligible", methods["reward"])
