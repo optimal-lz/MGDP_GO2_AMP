@@ -122,6 +122,8 @@ class TestOfficialTrainingScript(unittest.TestCase):
         self.assertIn('"--target_iteration"', source)
         self.assertIn('"--resume_from"', source)
         self.assertIn('"--amp_coef"', source)
+        self.assertIn('"--headless"', source)
+        self.assertIn('"action": "store_true"', source)
         self.assertNotIn('"--amp_reward_coef"', source)
         self.assertIn('"default": 4096', source)
         self.assertIn('"default": 1', source)

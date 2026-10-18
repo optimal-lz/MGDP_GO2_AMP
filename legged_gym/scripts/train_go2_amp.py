@@ -36,6 +36,7 @@ def parse_args():
         {"name": "--num_envs", "type": int, "default": 4096},
         {"name": "--rl_device", "type": str, "default": "cuda:0"},
         {"name": "--graphics_device_num", "type": int, "default": None},
+        {"name": "--headless", "action": "store_true", "default": False},
     ]
     return gymutil.parse_arguments(
         description="Train the formal Go2 perception locomotion task",
