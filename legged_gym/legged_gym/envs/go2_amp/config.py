@@ -30,6 +30,11 @@ class Go2AmpCfg(RandomCfgStage1):
         num_privileged_obs = 194
         num_histroy_obs = 4
 
+    class sim(RandomCfgStage1.sim):
+        class physx(RandomCfgStage1.sim.physx):
+            # 4096-env terrain load requires more than 18,619,319 pairs.
+            max_gpu_contact_pairs = 33_554_432
+
     class camera(RandomCfgStage1.camera):
         resized = [16, 16]
         update_interval = 5

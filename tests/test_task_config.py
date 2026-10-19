@@ -107,5 +107,16 @@ class TestGo2AmpTaskConfig(unittest.TestCase):
         policy = assignments(find_class(train_cfg, "policy"))
         self.assertIs(policy["use_visual_memory"], True)
 
+    def test_4096_sim_contact_capacity_exceeds_observed_physx_requirement(self):
+        tree = ast.parse(
+            (ROOT / "legged_gym/envs/go2_amp/config.py").read_text(
+                encoding="utf-8"))
+        env_cfg = find_class(tree, "Go2AmpCfg")
+        sim_cfg = find_class(env_cfg, "sim")
+        physx = assignments(find_class(sim_cfg, "physx"))
+
+        self.assertGreaterEqual(
+            physx["max_gpu_contact_pairs"], 18_619_319)
+
 if __name__ == "__main__":
     unittest.main()
