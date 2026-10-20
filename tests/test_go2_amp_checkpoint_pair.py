@@ -4,9 +4,11 @@ import importlib.util
 import json
 from pathlib import Path
 import pickle
+import sys
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -20,6 +22,64 @@ def load_module():
     spec = importlib.util.spec_from_file_location("go2_amp_checkpoint", MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def load_runner_module_without_training_dependencies():
+    """Load the real runner while replacing unavailable heavy imports."""
+    package_name = "_go2_amp_runner_test"
+
+    def package(name):
+        module = ModuleType(name)
+        module.__path__ = []
+        return module
+
+    torch = package("torch")
+    torch_utils = package("torch.utils")
+    torch_tensorboard = ModuleType("torch.utils.tensorboard")
+    torch_tensorboard.SummaryWriter = object
+
+    checkpoint = load_module()
+    logging = ModuleType(package_name + ".go2_amp_logging")
+    logging.IterationMetrics = object
+    logging.format_iteration_console = lambda *_args, **_kwargs: ""
+    policy_runner = ModuleType(package_name + ".policy_runner")
+    policy_runner.MGDPPolicyRunner = object
+
+    motions = ModuleType("rl.MGDP.amp.motions")
+    motions.MotionDataset = object
+    session = ModuleType("rl.MGDP.amp.session")
+    session.AMPSession = object
+    transition = ModuleType("rl.MGDP.amp.transition")
+    transition.select_next_amp_state = lambda *_args, **_kwargs: None
+    terrain = ModuleType("legged_gym.envs.go2_amp.terrain")
+    terrain.TERRAIN_NAMES = ("flat",)
+
+    modules = {
+        "torch": torch,
+        "torch.utils": torch_utils,
+        "torch.utils.tensorboard": torch_tensorboard,
+        "rl": package("rl"),
+        "rl.MGDP": package("rl.MGDP"),
+        "rl.MGDP.amp": package("rl.MGDP.amp"),
+        "rl.MGDP.amp.motions": motions,
+        "rl.MGDP.amp.session": session,
+        "rl.MGDP.amp.transition": transition,
+        "legged_gym": package("legged_gym"),
+        "legged_gym.envs": package("legged_gym.envs"),
+        "legged_gym.envs.go2_amp": package("legged_gym.envs.go2_amp"),
+        "legged_gym.envs.go2_amp.terrain": terrain,
+        package_name: package(package_name),
+        package_name + ".go2_amp_checkpoint": checkpoint,
+        package_name + ".go2_amp_logging": logging,
+        package_name + ".policy_runner": policy_runner,
+    }
+    module_name = package_name + ".go2_amp_runner"
+    spec = importlib.util.spec_from_file_location(module_name, RUNNER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(sys.modules, modules):
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
     return module
 
 
@@ -193,6 +253,75 @@ class TestPairedCheckpointManager(unittest.TestCase):
                             source.index("def world_model_state_dict")]
         self.assertLess(load_state.index("prepare_torch_rng_restore"),
                         load_state.index("self.alg.actor_critic.load_state_dict"))
+
+    def test_inference_load_ignores_env_count_but_resume_remains_strict(self):
+        runner_module = load_runner_module_without_training_dependencies()
+
+        class StateModule:
+            def __init__(self):
+                self.loaded = []
+
+            def load_state_dict(self, state):
+                self.loaded.append(state)
+
+        actor = StateModule()
+        amp = StateModule()
+        image_encoder = StateModule()
+        image_decoder = StateModule()
+        runner = runner_module.Go2AmpPolicyRunner.__new__(
+            runner_module.Go2AmpPolicyRunner)
+        runner.mode = "amp"
+        runner.env = SimpleNamespace(
+            terrain_levels=np.zeros(4, dtype=np.int64),
+            max_terrain_level=20,
+            cnn_encoder=image_encoder,
+            cnn_decoder=image_decoder,
+            use_map_decoder=False,
+            use_memory=False,
+        )
+        runner.alg = SimpleNamespace(actor_critic=actor)
+        runner.amp = amp
+        runner.checkpoint_compatibility = object()
+        policy_state = {
+            "mode": "amp",
+            "actor_state_dict": {"actor": "trained"},
+            "optimizer_state_dict": {"optimizer": "training-only"},
+            "ppo_learning_rate": 1e-5,
+            "iteration": 5000,
+            "terrain_levels": np.zeros(4096, dtype=np.int64),
+            "rng": {
+                "python": "p",
+                "numpy": "n",
+                "torch": "t",
+                "torch_cuda": "c",
+            },
+            "amp_state": {"amp": "trained"},
+        }
+        world_model_state = {
+            "iteration": 5000,
+            "networks": {
+                "image_encoder": {"encoder": "trained"},
+                "image_decoder": {"decoder": "trained"},
+            },
+            "wm_optimizer": {"optimizer": "training-only"},
+            "depth_stats": {},
+        }
+        runner.checkpoints = SimpleNamespace(
+            load_pair=lambda *_args: (
+                policy_state, world_model_state, {"iteration": 5000}))
+
+        metadata = runner.load_pair(
+            "checkpoint_5000.json", restore_training_state=False)
+
+        self.assertEqual(metadata, {"iteration": 5000})
+        self.assertEqual(actor.loaded, [{"actor": "trained"}])
+        self.assertEqual(amp.loaded, [{"amp": "trained"}])
+        self.assertEqual(image_encoder.loaded, [{"encoder": "trained"}])
+        self.assertEqual(image_decoder.loaded, [{"decoder": "trained"}])
+        self.assertEqual(runner.current_learning_iteration, 5000)
+        with self.assertRaisesRegex(ValueError, "terrain_levels shape"):
+            runner.load_pair(
+                "checkpoint_5000.json", restore_training_state=True)
 
     def test_adaptive_learning_rate_is_restored_into_scalar_and_optimizer(self):
         optimizer = SimpleNamespace(param_groups=[{"lr": 1e-3}, {"lr": 1e-3}])

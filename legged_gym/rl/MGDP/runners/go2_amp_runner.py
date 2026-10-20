@@ -419,7 +419,8 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
             state["amp_state"] = self.amp.state_dict()
         return state
 
-    def _validate_policy_state(self, state, mode):
+    def _validate_policy_state(
+            self, state, mode, validate_environment_state=True):
         required = {
             "mode", "actor_state_dict", "optimizer_state_dict",
             "ppo_learning_rate", "iteration", "terrain_levels", "rng",
@@ -440,7 +441,8 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         rng_fields = {"python", "numpy", "torch", "torch_cuda"}
         if set(state["rng"]) != rng_fields:
             raise ValueError("policy checkpoint RNG fields mismatch")
-        validate_terrain_state(self.env, state["terrain_levels"])
+        if validate_environment_state:
+            validate_terrain_state(self.env, state["terrain_levels"])
 
     def load_state_dict(self, state):
         self._validate_policy_state(state, self.mode)
@@ -538,7 +540,11 @@ class Go2AmpPolicyRunner(MGDPPolicyRunner):
         policy_state, wm_state, metadata = self.checkpoints.load_pair(
             manifest, self.checkpoint_compatibility)
         # Validate both halves before mutating either live subsystem.
-        self._validate_policy_state(policy_state, self.mode)
+        self._validate_policy_state(
+            policy_state,
+            self.mode,
+            validate_environment_state=restore_training_state,
+        )
         self._validate_world_model_state(wm_state)
         if restore_training_state:
             self.load_state_dict(policy_state)
