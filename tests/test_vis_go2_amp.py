@@ -35,6 +35,13 @@ class TestGo2AmpViewer(unittest.TestCase):
         self.assertIn("restore_training_state=False", self.source)
         self.assertIn("actor_critic.eval()", self.source)
 
+    def test_viewer_defines_headless_argument_required_by_task_registry(self):
+        self.assertIn(
+            '{"name": "--headless", "action": "store_true", '
+            '"default": False}',
+            self.source,
+        )
+
     def test_ffmpeg_is_touched_only_by_explicit_recording_branch(self):
         self.assertIn('"--record"', self.source)
         self.assertIn('"--record_output"', self.source)

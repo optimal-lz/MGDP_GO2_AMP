@@ -40,6 +40,7 @@ def parse_args():
         {"name": "--seed", "type": int, "default": 1},
         {"name": "--rl_device", "type": str, "default": "cuda:0"},
         {"name": "--graphics_device_num", "type": int, "default": None},
+        {"name": "--headless", "action": "store_true", "default": False},
         {"name": "--record", "action": "store_true"},
         {"name": "--record_output", "type": str, "default": None},
         {"name": "--duration", "type": float, "default": 10.0},
