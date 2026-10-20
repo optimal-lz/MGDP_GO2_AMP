@@ -164,7 +164,7 @@ tensorboard --logdir legged_gym/outputs/go2_amp
 
 ## Isaac Gym Viewer 与 WM 可解释性
 
-Viewer 严格加载一对 policy/WM checkpoint，关闭课程、随机化和训练更新，并允许指定单一地形、等级与命令。平地转向示例：
+Viewer 严格加载一对 policy/WM checkpoint，冻结课程、随机化和训练更新，并允许指定单一地形、等级与命令。地形和命令在每次 reset 后都会重新校验，实际 case 与请求不一致时直接报错。平地转向示例：
 
 ```bash
 python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain flat --level 5 --vx 0.4 --yaw 0.6 --follow_camera
@@ -177,6 +177,14 @@ python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/am
 ```
 
 结构化地形要求 `yaw=0`。省略 `--manifest` 时使用 `last.json`。Viewer 会显示机器人运动，并在 episode 结束时输出命令、实际速度、AMP reward 和失败原因。
+
+在策略验证前，可先打开不需要 checkpoint 的训练地形验收视图：
+
+```bash
+python legged_gym/scripts/view_go2_amp_terrains.py
+```
+
+该 Viewer 只使用正式训练的命名地形生成器，按十类地形和 level 0/9/19 生成30个地块。固定基座机器人仅作为尺寸参照；终端一次性打印地形名称、代表 level、环境编号与冻结训练比例。30个展示地块对十类地形等量取样，终端比例表示正式训练权重，不表示展示面积。
 
 WM 对比图写入：
 

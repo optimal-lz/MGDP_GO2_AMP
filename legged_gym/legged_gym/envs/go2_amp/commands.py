@@ -14,6 +14,14 @@ def _bool(array):
     return array.bool() if hasattr(array, "bool") else array.astype(bool)
 
 
+def apply_fixed_evaluation_commands(commands, env_ids, fixed_commands):
+    """Restore an evaluator-owned command after every environment reset."""
+    if fixed_commands is None:
+        return False
+    commands[env_ids] = fixed_commands[env_ids]
+    return True
+
+
 def apply_command_deadband(commands, vx_deadband=0.2, yaw_deadband=0.2):
     """Return commands with the frozen forward/yaw deadbands applied.
 

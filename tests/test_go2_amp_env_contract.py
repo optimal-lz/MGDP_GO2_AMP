@@ -34,6 +34,8 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
 
     def test_commands_increment_epoch_apply_deadband_and_disable_structured_yaw(self):
         source = self.methods["_resample_commands"]
+        self.assertIn("apply_fixed_evaluation_commands", source)
+        self.assertIn("_fixed_evaluation_commands", source)
         self.assertIn("apply_command_deadband", source)
         self.assertIn("apply_terrain_command_policy", source)
         self.assertIn("self.command_epoch[env_ids] += 1", source)

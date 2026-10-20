@@ -126,6 +126,13 @@ class TestComparisonOutputs(unittest.TestCase):
         self.assertIn("env.refresh_visual_observation()", source)
         self.assertIn("runner.alg.actor_critic.reset(dones)", source)
 
+    def test_runtime_uses_explicit_grid_and_freezes_each_matched_case(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("configure_evaluation_terrain_grid", source)
+        self.assertIn("freeze_evaluation_case", source)
+        self.assertIn("assert_evaluation_case", source)
+        self.assertNotIn("env_cfg.terrain.curriculum = False", source)
+
 
 if __name__ == "__main__":
     unittest.main()

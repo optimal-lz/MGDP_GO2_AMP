@@ -80,6 +80,13 @@ class TestGo2AmpViewer(unittest.TestCase):
                         main.index("actions = policy(obs)"))
         self.assertIn("runner.alg.actor_critic.reset(dones)", main)
 
+    def test_viewer_uses_explicit_grid_and_freezes_case_across_resets(self):
+        main = self.functions["main"]
+        self.assertIn("configure_evaluation_terrain_grid", main)
+        self.assertIn("freeze_evaluation_case", main)
+        self.assertIn("assert_evaluation_case", main)
+        self.assertNotIn("env_cfg.terrain.curriculum = False", main)
+
 
 if __name__ == "__main__":
     unittest.main()

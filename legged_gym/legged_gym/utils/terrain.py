@@ -198,12 +198,24 @@ class Terrain:
 
     def curiculum(self):
         explicit_columns = getattr(self.cfg, "explicit_terrain_columns", None)
-        if explicit_columns is not None and len(explicit_columns) != self.cfg.num_cols:
-            raise ValueError("explicit_terrain_columns must contain one name per terrain column")
+        explicit_levels = getattr(self.cfg, "explicit_terrain_levels", None)
+        formal_num_rows = self.cfg.num_rows
+        if explicit_columns is not None:
+            if len(explicit_columns) != self.cfg.num_cols:
+                raise ValueError("explicit_terrain_columns must contain one name per terrain column")
+            if explicit_levels is not None and len(explicit_levels) != self.cfg.num_rows:
+                raise ValueError("explicit_terrain_levels must contain one level per terrain row")
+            formal_num_rows = int(getattr(
+                self.cfg, "explicit_terrain_num_rows", self.cfg.num_rows))
+            if formal_num_rows < 2:
+                raise ValueError("explicit_terrain_num_rows must be at least two")
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
                 if explicit_columns is not None:
-                    difficulty = i / (self.cfg.num_rows - 1)
+                    level = i if explicit_levels is None else explicit_levels[i]
+                    if level < 0 or level >= formal_num_rows:
+                        raise ValueError("explicit terrain level is outside the formal grid")
+                    difficulty = level / (formal_num_rows - 1)
                     terrain = self.make_terrain_by_name(explicit_columns[j], difficulty)
                 else:
                     difficulty = i / self.cfg.num_rows

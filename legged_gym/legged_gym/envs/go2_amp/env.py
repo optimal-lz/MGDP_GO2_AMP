@@ -17,6 +17,7 @@ from rl.MGDP.amp.state import pack_amp_state, validate_go2_dofs
 from .commands import (
     amp_transition_mask,
     apply_command_deadband,
+    apply_fixed_evaluation_commands,
     apply_terrain_command_policy,
     classify_commands,
 )
@@ -97,6 +98,11 @@ class Go2AmpRandomDog(Randomdog):
 
     def _resample_commands(self, env_ids):
         if env_ids.numel() == 0:
+            return
+        if apply_fixed_evaluation_commands(
+                self.commands, env_ids,
+                getattr(self, "_fixed_evaluation_commands", None)):
+            self.command_epoch[env_ids] += 1
             return
         count = len(env_ids)
         self.commands[env_ids, 0] = torch_rand_float(

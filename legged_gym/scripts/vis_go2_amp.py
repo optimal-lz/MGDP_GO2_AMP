@@ -19,7 +19,12 @@ from legged_gym.envs import *  # noqa: F401,F403 - registers go2_amp
 from legged_gym.envs.baseline.randomization import (
     disable_evaluation_stochasticity,
 )
-from legged_gym.envs.go2_amp.terrain import TERRAIN_NAMES
+from legged_gym.envs.go2_amp.terrain import (
+    TERRAIN_NAMES,
+    assert_evaluation_case,
+    configure_evaluation_terrain_grid,
+    freeze_evaluation_case,
+)
 from legged_gym.utils import task_registry
 from rl.MGDP.amp.transition import select_next_amp_state
 from rl.MGDP.runners import Go2AmpPolicyRunner
@@ -184,9 +189,8 @@ def main():
     env_cfg.seed = args.seed
     env_cfg.env.num_envs = args.num_envs
     env_cfg.viewer.ref_env = args.env_id
-    env_cfg.terrain.curriculum = False
-    env_cfg.terrain.num_cols = 1
-    env_cfg.terrain.explicit_terrain_columns = (args.terrain,)
+    configure_evaluation_terrain_grid(
+        env_cfg.terrain, (args.terrain,))
     env_cfg.commands.ranges.lin_vel_x = [args.vx, args.vx]
     env_cfg.commands.ranges.new_lin_vel_x = [args.vx, args.vx]
     env_cfg.commands.ranges.lin_vel_y = [0.0, 0.0]
@@ -225,12 +229,11 @@ def main():
     env.cfg.camera.render_compare_pre_map = True
 
     env_ids = torch.arange(env.num_envs, device=env.device)
-    env.terrain_levels.fill_(args.level)
-    env.env_origins[:] = env.terrain_origins[
-        env.terrain_levels, env.terrain_types]
-    env.env_class[:] = env.terrain_class[
-        env.terrain_levels, env.terrain_types]
+    freeze_evaluation_case(
+        env, args.terrain, args.level, args.vx, args.yaw)
     env.reset_idx(env_ids)
+    assert_evaluation_case(
+        env, args.terrain, args.level, args.vx, args.yaw)
     env.compute_observations()
     env.refresh_visual_observation()
     obs = env.get_observations()
@@ -269,6 +272,12 @@ def main():
                         enabled=True)
                 else:
                     amp_reward = torch.zeros_like(dones, dtype=torch.float)
+
+            reset_ids = dones.nonzero(as_tuple=False).flatten()
+            if reset_ids.numel() > 0:
+                assert_evaluation_case(
+                    env, args.terrain, args.level, args.vx, args.yaw,
+                    env_ids=reset_ids)
 
             if args.follow_camera:
                 position = env.root_states[args.env_id, :3].detach().cpu().numpy()

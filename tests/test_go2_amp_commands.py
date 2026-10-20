@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "legged_gym/legged_gym/envs/go2_amp"))
 
 from commands import (
     amp_transition_mask,
+    apply_fixed_evaluation_commands,
     apply_command_deadband,
     apply_terrain_command_policy,
     classify_commands,
@@ -16,6 +17,35 @@ from commands import (
 
 
 class TestGo2AmpCommands(unittest.TestCase):
+    def test_fixed_evaluation_commands_replace_only_selected_envs(self):
+        commands = np.zeros((4, 4), dtype=np.float32)
+        fixed = np.asarray([
+            [0.4, 0.0, 0.0, 0.0],
+            [0.4, 0.0, 0.0, 0.0],
+            [0.8, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.5, 0.0],
+        ], dtype=np.float32)
+
+        applied = apply_fixed_evaluation_commands(
+            commands, np.asarray([1, 3]), fixed)
+
+        self.assertTrue(applied)
+        np.testing.assert_allclose(commands, [
+            [0.0, 0.0, 0.0, 0.0],
+            [0.4, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.5, 0.0],
+        ])
+
+    def test_missing_fixed_commands_leave_training_commands_untouched(self):
+        commands = np.asarray([[0.3, 0.0, 0.2]], dtype=np.float32)
+
+        applied = apply_fixed_evaluation_commands(
+            commands, np.asarray([0]), None)
+
+        self.assertFalse(applied)
+        np.testing.assert_allclose(commands, [[0.3, 0.0, 0.2]])
+
     def test_deadband_zeros_boundary_values_and_preserves_locomotion(self):
         commands = np.asarray([
             [0.0, 0.0, 0.0],

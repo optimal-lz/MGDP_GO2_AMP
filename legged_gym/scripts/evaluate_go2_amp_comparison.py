@@ -302,6 +302,10 @@ class _IsaacEvaluator:
         from legged_gym.envs.baseline.randomization import (
             disable_evaluation_stochasticity,
         )
+        from legged_gym.envs.go2_amp.terrain import (
+            TERRAIN_COLUMNS,
+            configure_evaluation_terrain_grid,
+        )
         from legged_gym.utils import set_seed
         from rl.MGDP.runners import Go2AmpPolicyRunner
 
@@ -316,7 +320,8 @@ class _IsaacEvaluator:
         env_cfg, _ = task_registry.get_cfgs("go2_amp")
         env_cfg.seed = int(options.base_seed)
         env_cfg.env.num_envs = num_episodes
-        env_cfg.terrain.curriculum = False
+        configure_evaluation_terrain_grid(
+            env_cfg.terrain, TERRAIN_COLUMNS)
         disable_evaluation_stochasticity(env_cfg)
         env_cfg.noise.add_noise = False
         env_cfg.camera.update_wm = False
@@ -368,7 +373,10 @@ class _IsaacEvaluator:
 
     def _run_schedule(self, runner, env, schedule, shared_amp):
         import torch
-        from legged_gym.envs.go2_amp.terrain import TERRAIN_COLUMNS
+        from legged_gym.envs.go2_amp.terrain import (
+            assert_evaluation_case,
+            freeze_evaluation_case,
+        )
         from legged_gym.utils import set_seed
         from rl.MGDP.amp.transition import select_next_amp_state
 
@@ -377,28 +385,19 @@ class _IsaacEvaluator:
         episodes_per_case = env.num_envs
         cases = [schedule[index:index + episodes_per_case]
                  for index in range(0, len(schedule), episodes_per_case)]
-        column_for = {
-            name: TERRAIN_COLUMNS.index(name) for name in TERRAIN_NAMES}
-
         for case_rows in cases:
             first = case_rows[0]
-            column = column_for[first["terrain"]]
-            env.terrain_types.fill_(column)
-            env.terrain_levels.fill_(int(first["level"]))
-            env.env_origins[:] = env.terrain_origins[
-                env.terrain_levels, env.terrain_types]
-            env.env_class[:] = env.terrain_class[
-                env.terrain_levels, env.terrain_types]
-            for key, value in (
-                    ("lin_vel_x", first["vx_command"]),
-                    ("lin_vel_y", 0.0),
-                    ("ang_vel_yaw", first["yaw_command"])):
-                env.command_ranges[key] = [value, value]
+            freeze_evaluation_case(
+                env, first["terrain"], first["level"],
+                first["vx_command"], first["yaw_command"])
 
             for env_index, item in enumerate(case_rows):
                 set_seed(item["seed"])
                 env.reset_idx(torch.tensor(
                     [env_index], device=env.device, dtype=torch.long))
+            assert_evaluation_case(
+                env, first["terrain"], first["level"],
+                first["vx_command"], first["yaw_command"])
             env.compute_observations()
             env.refresh_visual_observation()
             obs = env.get_observations()
@@ -433,6 +432,13 @@ class _IsaacEvaluator:
                         infos.get("terminal_amp_states"))
                     style_step = self._style_score(
                         shared_amp, amp_before, amp_after)
+
+                reset_ids = dones.nonzero(as_tuple=False).flatten()
+                if reset_ids.numel() > 0:
+                    assert_evaluation_case(
+                        env, first["terrain"], first["level"],
+                        first["vx_command"], first["yaw_command"],
+                        env_ids=reset_ids)
 
                 vx_now = env.base_lin_vel[:, 0].clone()
                 yaw_now = env.base_ang_vel[:, 2].clone()
