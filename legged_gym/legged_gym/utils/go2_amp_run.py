@@ -11,6 +11,11 @@ import uuid
 import numpy as np
 
 
+def formal_output_root(legged_gym_root):
+    """Return the isolated root for corrected V1 terrain runs."""
+    return Path(legged_gym_root) / "outputs" / "go2_amp_v1"
+
+
 def normalize_effective_config(value):
     """Return one JSON-native representation for run/checkpoint config.
 

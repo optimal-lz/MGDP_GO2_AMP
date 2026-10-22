@@ -15,6 +15,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs import *  # noqa: F401,F403 - registers go2_amp
 from legged_gym.utils import (
     class_to_dict,
+    formal_output_root,
     format_run_name,
     normalize_effective_config,
     prepare_run_directory,
@@ -85,7 +86,7 @@ def main():
 
     run_name = format_run_name(
         args.mode, coefficient, args.seed, args.num_envs)
-    output_root = Path(LEGGED_GYM_ROOT_DIR) / "outputs" / "go2_amp"
+    output_root = formal_output_root(LEGGED_GYM_ROOT_DIR)
     run_dir = prepare_run_directory(
         output_root, run_name, resume=args.resume_from is not None)
     resume_manifest = (

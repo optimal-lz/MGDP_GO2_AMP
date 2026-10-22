@@ -1,4 +1,5 @@
 import importlib.util
+import ast
 import json
 from pathlib import Path
 import tempfile
@@ -38,6 +39,13 @@ class TestGo2AmpRunUtilities(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "coefficient"):
             self.module.format_run_name("no_amp", 0.01, 1, 4096)
+
+    def test_corrected_runs_use_an_isolated_v1_output_root(self):
+        root = Path("/repository/legged_gym")
+        self.assertTrue(hasattr(self.module, "formal_output_root"))
+        output = self.module.formal_output_root(root)
+        self.assertEqual(output, root / "outputs" / "go2_amp_v1")
+        self.assertNotEqual(output, root / "outputs" / "go2_amp")
 
     def test_absolute_target_is_converted_to_remaining_work(self):
         self.assertEqual(self.module.remaining_iterations(2000, 1000), 1000)
@@ -115,6 +123,32 @@ class TestGo2AmpRunUtilities(unittest.TestCase):
 
 
 class TestOfficialTrainingScript(unittest.TestCase):
+    @staticmethod
+    def load_resume_resolver():
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_resolve_resume_manifest")
+        module = ast.Module(body=[function], type_ignores=[])
+        ast.fix_missing_locations(module)
+        namespace = {"Path": Path, "json": json}
+        exec(compile(module, str(SCRIPT_PATH), "exec"), namespace)
+        return namespace["_resolve_resume_manifest"]
+
+    def test_resume_rejects_pre_revision_root_before_checkpoint_loading(self):
+        resolver = self.load_resume_resolver()
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            base = Path(temporary)
+            old_run = base / "outputs" / "go2_amp" / "amp_coef0p01_seed1"
+            new_run = base / "outputs" / "go2_amp_v1" / "amp_coef0p01_seed1"
+            (old_run / "checkpoints").mkdir(parents=True)
+            (old_run / "checkpoints" / "last.json").write_text(
+                '{"manifest":"checkpoint_10.json"}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                resolver(old_run, new_run)
+
     def test_cli_is_narrow_and_uses_absolute_target(self):
         source = SCRIPT_PATH.read_text(encoding="utf-8")
         self.assertIn('"--mode"', source)
