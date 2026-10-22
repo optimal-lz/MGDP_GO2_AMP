@@ -25,14 +25,14 @@ class TestComparisonCases(unittest.TestCase):
         self.assertEqual(len(cases), 72)
         forward = [case for case in cases if case["vx"] > 0]
         turns = [case for case in cases if case["vx"] == 0]
-        self.assertEqual(len(forward), 60)
-        self.assertEqual(len(turns), 12)
+        self.assertEqual(len(forward), 56)
+        self.assertEqual(len(turns), 16)
         self.assertEqual({case["terrain"] for case in forward},
                          set(self.module.TERRAIN_NAMES))
-        self.assertEqual({case["level"] for case in cases}, {0, 9, 19})
+        self.assertEqual({case["level"] for case in cases}, {0, 3, 6, 9})
         self.assertEqual({case["vx"] for case in forward}, {0.4, 0.8})
         self.assertEqual({case["terrain"] for case in turns},
-                         {"flat", "rough_flat"})
+                         {"flat", "rough_ground"})
         self.assertEqual({case["yaw"] for case in turns}, {-0.5, 0.5})
 
     def test_episode_schedule_is_identical_for_both_policies(self):
@@ -95,7 +95,7 @@ class TestComparisonOutputs(unittest.TestCase):
                     "completion", "progress", "vx_rmse", "yaw_rmse",
                     "base_contact_failure", "action_rate", "torque",
                     "episode_length", "wm_depth_mse", "wm_height_mse",
-                    "amp_style_score"):
+                    "amp_style_score", "base_lin_vel_z_sq"):
                 self.assertIn(field, fields)
 
     def test_source_freezes_shared_style_and_disables_training_noise(self):
@@ -125,6 +125,12 @@ class TestComparisonOutputs(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("env.refresh_visual_observation()", source)
         self.assertIn("runner.alg.actor_critic.reset(dones)", source)
+
+    def test_vertical_motion_uses_live_and_terminal_base_velocity(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("base_lin_vel[:, 2]", source)
+        self.assertIn('terminal["base_lin_vel"][:, 2]', source)
+        self.assertIn("base_lin_vel_z_sq", self.module.METRIC_FIELDS)
 
     def test_runtime_uses_explicit_grid_and_freezes_each_matched_case(self):
         source = SCRIPT.read_text(encoding="utf-8")

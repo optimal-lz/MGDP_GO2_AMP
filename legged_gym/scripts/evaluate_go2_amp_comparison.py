@@ -16,16 +16,17 @@ import zlib
 os.environ["DOG_NAMES"] = "go2"
 
 TERRAIN_NAMES = (
-    "flat", "rough_flat", "smooth_slope", "rough_slope", "stairs",
-    "discrete_obstacles", "hurdle", "gap", "pit", "narrow_passage",
+    "flat", "rough_ground", "slope_course", "stairs_course",
+    "low_obstacle_course", "gap_course", "narrow_passage",
 )
-LEVELS = (0, 9, 19)
+LEVELS = (0, 3, 6, 9)
 FORWARD_SPEEDS = (0.4, 0.8)
 TURN_RATES = (-0.5, 0.5)
 
 METRIC_FIELDS = (
     "completion", "progress", "vx_rmse", "yaw_rmse",
-    "base_contact_failure", "action_rate", "torque", "episode_length",
+    "base_lin_vel_z_sq", "base_contact_failure", "action_rate", "torque",
+    "episode_length",
     "wm_depth_mse", "wm_height_mse", "amp_style_score",
 )
 CASE_FIELDS = (
@@ -57,7 +58,7 @@ def build_cases():
                     "terrain": terrain, "level": level,
                     "vx": vx, "yaw": 0.0,
                 })
-    for terrain in ("flat", "rough_flat"):
+    for terrain in ("flat", "rough_ground"):
         for level in LEVELS:
             for yaw in TURN_RATES:
                 cases.append({
@@ -409,6 +410,7 @@ class _IsaacEvaluator:
             step_count = torch.zeros(env.num_envs, device=env.device)
             vx_sq = torch.zeros(env.num_envs, device=env.device)
             yaw_sq = torch.zeros(env.num_envs, device=env.device)
+            base_lin_vel_z_sq = torch.zeros(env.num_envs, device=env.device)
             action_rate = torch.zeros(env.num_envs, device=env.device)
             torque = torch.zeros(env.num_envs, device=env.device)
             wm_depth = torch.zeros(env.num_envs, device=env.device)
@@ -442,12 +444,14 @@ class _IsaacEvaluator:
 
                 vx_now = env.base_lin_vel[:, 0].clone()
                 yaw_now = env.base_ang_vel[:, 2].clone()
+                base_lin_vel_z_now = env.base_lin_vel[:, 2].clone()
                 position_now = env.root_states[:, :2].clone()
                 terminal = infos.get("terminal_diagnostics")
                 if terminal is not None:
                     ids = terminal["env_ids"].long()
                     vx_now[ids] = terminal["base_lin_vel"][:, 0]
                     yaw_now[ids] = terminal["base_ang_vel"][:, 2]
+                    base_lin_vel_z_now[ids] = terminal["base_lin_vel"][:, 2]
                     position_now[ids] = terminal["root_positions"][:, :2]
                     done_timeout[ids] = terminal["time_outs"].bool()
 
@@ -455,6 +459,7 @@ class _IsaacEvaluator:
                 step_count += mask
                 vx_sq += mask * (vx_now - first["vx_command"]).square()
                 yaw_sq += mask * (yaw_now - first["yaw_command"]).square()
+                base_lin_vel_z_sq += mask * base_lin_vel_z_now.square()
                 action_rate += mask * (
                     actions - previous_actions).square().mean(dim=1)
                 torque += mask * env.torques.abs().mean(dim=1)
@@ -481,6 +486,8 @@ class _IsaacEvaluator:
                     "progress": float(final_progress[index]),
                     "vx_rmse": math.sqrt(float(vx_sq[index] / count[index])),
                     "yaw_rmse": math.sqrt(float(yaw_sq[index] / count[index])),
+                    "base_lin_vel_z_sq": float(
+                        base_lin_vel_z_sq[index] / count[index]),
                     "base_contact_failure": float(not done_timeout[index]),
                     "action_rate": float(action_rate[index] / count[index]),
                     "torque": float(torque[index] / count[index]),
