@@ -21,7 +21,11 @@ from .commands import (
     apply_terrain_command_policy,
     classify_commands,
 )
-from .terrain import TERRAIN_CLASS_IDS, next_curriculum_levels
+from .terrain import (
+    TERRAIN_CLASS_IDS,
+    next_curriculum_levels,
+    terrain_column_indices,
+)
 
 
 TASK_REWARD_NAMES = frozenset({
@@ -36,6 +40,7 @@ class Go2AmpRandomDog(Randomdog):
 
     def __init__(self, cfg, sim_params, physics_engine, sim_device, headless):
         validate_training_randomization(cfg.domain_rand)
+        cfg.terrain.generation_seed = int(cfg.seed)
         super().__init__(cfg, sim_params, physics_engine, sim_device, headless)
         validate_go2_dofs(self.dof_names)
 
@@ -56,7 +61,7 @@ class Go2AmpRandomDog(Randomdog):
             self.num_envs, 30, dtype=torch.float, device=self.device)
 
     def _get_env_origins(self):
-        """Use all ten terrain types from level zero, without anchors or stages."""
+        """Use all formal terrain types from level zero without staged unlocks."""
         self.custom_origins = self.cfg.terrain.custom_origins
         self.env_origins = torch.zeros(
             self.num_envs, 3, device=self.device, requires_grad=False)
@@ -65,12 +70,10 @@ class Go2AmpRandomDog(Randomdog):
         self.terrain_levels = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device,
             requires_grad=False)
-        environments_per_column = self.num_envs / self.cfg.terrain.num_cols
-        self.terrain_types = torch.div(
-            torch.arange(self.num_envs, device=self.device),
-            environments_per_column,
-            rounding_mode="floor",
-        ).to(torch.long)
+        self.terrain_types = torch.tensor(
+            terrain_column_indices(
+                self.num_envs, self.cfg.terrain.num_cols),
+            dtype=torch.long, device=self.device)
         self.max_terrain_level = self.cfg.terrain.num_rows
         self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(
             device=self.device, dtype=torch.float)
@@ -118,7 +121,7 @@ class Go2AmpRandomDog(Randomdog):
         terrain_classes = self.env_class[env_ids].long()
         flat_or_rough = (
             (terrain_classes == TERRAIN_CLASS_IDS["flat"])
-            | (terrain_classes == TERRAIN_CLASS_IDS["rough_flat"])
+            | (terrain_classes == TERRAIN_CLASS_IDS["rough_ground"])
         )
         structured_ids = env_ids[~flat_or_rough]
         if structured_ids.numel() > 0:
@@ -134,7 +137,7 @@ class Go2AmpRandomDog(Randomdog):
             sampled,
             terrain_classes,
             turning_terrain_ids=(TERRAIN_CLASS_IDS["flat"],
-                                 TERRAIN_CLASS_IDS["rough_flat"]),
+                                 TERRAIN_CLASS_IDS["rough_ground"]),
         )
         self.command_epoch[env_ids] += 1
 
@@ -246,17 +249,16 @@ class Go2AmpRandomDog(Randomdog):
             feet_pos_xy[..., 1], 0, self.x_edge_mask.shape[1] - 1)
         self.feet_at_edge = contact_filt & self.x_edge_mask[
             feet_pos_xy[..., 0], feet_pos_xy[..., 1]]
-        gap_or_pit = (
-            (self.env_class == TERRAIN_CLASS_IDS["gap"])
-            | (self.env_class == TERRAIN_CLASS_IDS["pit"])
+        enabled = (
+            (self.env_class == TERRAIN_CLASS_IDS["gap_course"])
+            & (self.terrain_levels >= 2)
         )
-        enabled = gap_or_pit & (self.terrain_levels > 3)
         return torch.sum(self.feet_at_edge, dim=-1).float() * enabled
 
     def _reward_cheat(self):
         structured = (
             (self.env_class != TERRAIN_CLASS_IDS["flat"])
-            & (self.env_class != TERRAIN_CLASS_IDS["rough_flat"])
+            & (self.env_class != TERRAIN_CLASS_IDS["rough_ground"])
         )
         heading_error = wrap_to_pi(self.yaw - self.episode_start_yaw)
         return (structured & (torch.abs(heading_error) > 1.0)).float()
@@ -283,13 +285,18 @@ class Go2AmpRandomDog(Randomdog):
         self.root_states[env_ids] = self.base_init_state
         self.root_states[env_ids, :2] += self.env_origins[env_ids, :2]
         terrain_classes = self.env_class[env_ids].long()
-        flat_or_rough = (
-            (terrain_classes == TERRAIN_CLASS_IDS["flat"])
-            | (terrain_classes == TERRAIN_CLASS_IDS["rough_flat"])
-        )
-        spawn_jitter = torch_rand_float(
-            -0.2, 0.2, (len(env_ids), 2), device=self.device)
-        spawn_jitter[~flat_or_rough, 1] = 0.0
+        flat = terrain_classes == TERRAIN_CLASS_IDS["flat"]
+        rough_ground = terrain_classes == TERRAIN_CLASS_IDS["rough_ground"]
+        spawn_jitter = torch.zeros(
+            len(env_ids), 2, device=self.device, dtype=torch.float)
+        spawn_jitter[:, 0] = torch_rand_float(
+            -0.1, 0.1, (len(env_ids), 1), device=self.device).squeeze(1)
+        lateral = torch_rand_float(
+            -0.2, 0.2, (len(env_ids), 1), device=self.device).squeeze(1)
+        spawn_jitter[flat | rough_ground, 1] = lateral[flat | rough_ground]
+        flat_extra_x = torch_rand_float(
+            -0.1, 0.1, (len(env_ids), 1), device=self.device).squeeze(1)
+        spawn_jitter[flat, 0] += flat_extra_x[flat]
         self.root_states[env_ids, :2] += spawn_jitter
         self.root_states[env_ids, 2] = self.env_origins[env_ids, 2] + 0.45
         self.root_states[env_ids, 7:13] = 0.0

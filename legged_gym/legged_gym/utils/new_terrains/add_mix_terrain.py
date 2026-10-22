@@ -2,75 +2,18 @@ from isaacgym import terrain_utils
 import numpy as np
 import random
 
-
-GO2_AMP_TERRAIN_CLASS_IDS = {
-    "flat": 0,
-    "rough_flat": 1,
-    "smooth_slope": 2,
-    "rough_slope": 3,
-    "stairs": 4,
-    "discrete_obstacles": 5,
-    "hurdle": 6,
-    "gap": 7,
-    "pit": 8,
-    "narrow_passage": 9,
-}
+from .go2_amp_terrain import (
+    TERRAIN_CLASS_IDS as GO2_AMP_TERRAIN_CLASS_IDS,
+    build_go2_amp_terrain,
+)
 
 
-def trimesh_terrain_by_name(terrain, terrain_name, difficulty, add_roughness, num_rows):
+def trimesh_terrain_by_name(terrain, terrain_name, difficulty, add_roughness,
+                            num_rows, seed=None):
     """Build one formal Go2 AMP terrain with monotonic geometry difficulty."""
-    if terrain_name not in GO2_AMP_TERRAIN_CLASS_IDS:
-        raise ValueError(f"unknown Go2 AMP terrain: {terrain_name}")
-
-    difficulty = min(1.0, max(0.0, float(difficulty)))
-    slope = 0.4 * difficulty
-    roughness = 0.005 + 0.045 * difficulty
-    step_height = 0.03 + 0.17 * difficulty
-    obstacle_height = 0.03 + 0.17 * difficulty
-
-    if terrain_name == "rough_flat":
-        terrain_utils.random_uniform_terrain(
-            terrain, min_height=-roughness, max_height=roughness,
-            step=0.005, downsampled_scale=0.2,
-        )
-    elif terrain_name == "smooth_slope":
-        terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.0)
-    elif terrain_name == "rough_slope":
-        terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.0)
-        terrain_utils.random_uniform_terrain(
-            terrain, min_height=-roughness, max_height=roughness,
-            step=0.005, downsampled_scale=0.2,
-        )
-    elif terrain_name == "stairs":
-        terrain_utils.pyramid_stairs_terrain(
-            terrain, step_width=0.31, step_height=step_height, platform_size=3.0
-        )
-    elif terrain_name == "discrete_obstacles":
-        terrain_utils.discrete_obstacles_terrain(
-            terrain, obstacle_height, 0.5, 1.5, 20, platform_size=3.0,
-        )
-    elif terrain_name == "hurdle":
-        parkour_hurdle_terrain(
-            terrain, num_stones=4, x_range=[1.2, 2.0],
-            hurdle_height=0.05 + 0.20 * difficulty, platform_size=2.0,
-        )
-    elif terrain_name == "gap":
-        gap_terrain(
-            terrain, gap_size=0.10 + 0.70 * difficulty,
-            depth=1.0, platform_size=2.0,
-        )
-    elif terrain_name == "pit":
-        pit_terrain(
-            terrain, depth=0.05 + 0.45 * difficulty, platform_size=4.0,
-        )
-    elif terrain_name == "narrow_passage":
-        narrow_passage_terrain(
-            terrain, passage_width=1.20 - 0.50 * difficulty,
-            wall_height=0.20 + 0.30 * difficulty, platform_size=2.0,
-        )
-
-    clear_spawn_platform(terrain, platform_size=2.0)
-    terrain.idx = GO2_AMP_TERRAIN_CLASS_IDS[terrain_name]
+    del add_roughness, num_rows
+    build_go2_amp_terrain(
+        terrain, terrain_name, difficulty, 0 if seed is None else seed)
 
 
 def clear_spawn_platform(terrain, platform_size=2.0):

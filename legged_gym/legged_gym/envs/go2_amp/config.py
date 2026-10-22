@@ -51,10 +51,11 @@ class Go2AmpCfg(RandomCfgStage1):
         use_memory = False
 
     class terrain(RandomCfgStage1.terrain):
+        revision = "v1_terrain_r1"
         mesh_type = "mix"
         curriculum = True
         max_init_terrain_level = 0
-        num_rows = 20
+        num_rows = 10
         num_cols = len(GO2_AMP_TERRAIN_COLUMNS)
         explicit_terrain_columns = GO2_AMP_TERRAIN_COLUMNS
 

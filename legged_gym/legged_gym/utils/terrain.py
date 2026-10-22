@@ -216,14 +216,17 @@ class Terrain:
                     if level < 0 or level >= formal_num_rows:
                         raise ValueError("explicit terrain level is outside the formal grid")
                     difficulty = level / (formal_num_rows - 1)
-                    terrain = self.make_terrain_by_name(explicit_columns[j], difficulty)
+                    seed = int(getattr(self.cfg, "generation_seed", 0))
+                    seed += i * self.cfg.num_cols + j
+                    terrain = self.make_terrain_by_name(
+                        explicit_columns[j], difficulty, seed=seed)
                 else:
                     difficulty = i / self.cfg.num_rows
                     choice = j / self.cfg.num_cols + 0.001
                     terrain = self.make_terrain(choice, difficulty)
                 self.add_terrain_to_map(terrain, i, j)
 
-    def make_terrain_by_name(self, terrain_name, difficulty):
+    def make_terrain_by_name(self, terrain_name, difficulty, seed=0):
         terrain = terrain_utils.SubTerrain(
             "terrains",
             width=self.length_per_env_pixels,
@@ -237,6 +240,7 @@ class Terrain:
             difficulty,
             self.add_roughness,
             self.cfg.num_rows,
+            seed=seed,
         )
         return terrain
 
@@ -318,17 +322,25 @@ class Terrain:
         self.height_field_raw[start_x: end_x, start_y:end_y] = terrain.height_field_raw
 
         if self.type == "mix":
-            env_origin_x = (i + 0.5) * self.env_length
-            env_origin_y = (j + 0.5) * self.env_width
-            x1 = int((self.env_length / 2. - 1) / terrain.horizontal_scale)
-            x2 = int((self.env_length / 2. + 1) / terrain.horizontal_scale)
-            y1 = int((self.env_width / 2. - 1) / terrain.horizontal_scale)
-            y2 = int((self.env_width / 2. + 1) / terrain.horizontal_scale)
-            env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2]) * terrain.vertical_scale
+            spawn = getattr(terrain, "spawn_origin", None)
+            if spawn is None:
+                env_origin_x = (i + 0.5) * self.env_length
+                env_origin_y = (j + 0.5) * self.env_width
+                x1 = int((self.env_length / 2. - 1) / terrain.horizontal_scale)
+                x2 = int((self.env_length / 2. + 1) / terrain.horizontal_scale)
+                y1 = int((self.env_width / 2. - 1) / terrain.horizontal_scale)
+                y2 = int((self.env_width / 2. + 1) / terrain.horizontal_scale)
+                env_origin_z = np.max(
+                    terrain.height_field_raw[x1:x2, y1:y2]
+                ) * terrain.vertical_scale
+            else:
+                env_origin_x = i * self.env_length + float(spawn[0])
+                env_origin_y = j * self.env_width + float(spawn[1])
+                env_origin_z = float(spawn[2])
             self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
             self.terrain_type[i, j] = terrain.idx
 
-        if self.type == "gap_parkour":
+        elif self.type == "gap_parkour":
             env_origin_x = (i + 0.5) * self.env_length
             env_origin_y = (j + 0.5) * self.env_width
             x1 = int((self.env_length / 2. - 1) / terrain.horizontal_scale)

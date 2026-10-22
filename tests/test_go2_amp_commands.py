@@ -75,7 +75,7 @@ class TestGo2AmpCommands(unittest.TestCase):
 
     def test_structured_terrain_disables_yaw(self):
         commands = np.asarray([[0.8, 0.0, 0.5]] * 4, dtype=np.float32)
-        terrain_classes = np.asarray([0, 1, 2, 9])
+        terrain_classes = np.asarray([0, 1, 2, 6])
 
         filtered = apply_terrain_command_policy(
             commands, terrain_classes, turning_terrain_ids=(0, 1))

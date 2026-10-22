@@ -59,9 +59,10 @@ class TestAmpReward(unittest.TestCase):
         _, cheat = _load_reward_method("_reward_cheat")
         _, stuck = _load_reward_method("_reward_stuck")
         self.assertIn("self.get_idle_mask()", dof_error)
-        self.assertIn("self.env_class == TERRAIN_CLASS_IDS['gap']", feet_edge)
-        self.assertIn("self.env_class == TERRAIN_CLASS_IDS['pit']", feet_edge)
-        self.assertIn("self.terrain_levels > 3", feet_edge)
+        self.assertIn(
+            "self.env_class == TERRAIN_CLASS_IDS['gap_course']", feet_edge)
+        self.assertNotIn("TERRAIN_CLASS_IDS['pit']", feet_edge)
+        self.assertIn("self.terrain_levels >= 2", feet_edge)
         self.assertIn("structured", cheat)
         self.assertIn("torch.abs(heading_error) > 1.0", cheat)
         self.assertIn("self.commands[:, 0] > self.cfg.commands.vx_deadband", stuck)

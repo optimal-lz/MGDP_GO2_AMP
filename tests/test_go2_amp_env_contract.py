@@ -41,7 +41,7 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
         self.assertIn("self.command_epoch[env_ids] += 1", source)
         self.assertIn("turning_terrain_ids", source)
         self.assertIn("TERRAIN_CLASS_IDS['flat']", source)
-        self.assertIn("TERRAIN_CLASS_IDS['rough_flat']", source)
+        self.assertIn("TERRAIN_CLASS_IDS['rough_ground']", source)
         self.assertIn("self.cfg.commands.vx_deadband + 1e-06", source)
 
     def test_idle_and_locomotion_are_exact_complements(self):
@@ -65,8 +65,8 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
         self.assertIn("torch_rand_float(0.9, 1.1", dofs)
         self.assertIn("self.dof_vel[env_ids] = 0.0", dofs)
         self.assertIn("self.env_origins[env_ids, 2] + 0.45", root)
-        self.assertIn("flat_or_rough", root)
-        self.assertIn("torch_rand_float(-0.2, 0.2", root)
+        self.assertIn("torch_rand_float(-0.1, 0.1", root)
+        self.assertIn("rough_ground", root)
         self.assertIn("self.root_states[env_ids, 7:13] = 0.0", root)
         self.assertIn("_reset_amp_histories", reset)
         self.assertNotIn("reference", reset.lower())
@@ -103,6 +103,14 @@ class TestGo2AmpEnvironmentContract(unittest.TestCase):
         termination = self.methods["check_termination"]
         self.assertNotIn("stuck", termination.lower())
         self.assertIn("_reward_stuck", self.methods)
+
+    def test_gap_edge_and_heading_penalties_use_revised_classes(self):
+        edge = self.methods["_reward_feet_edge"]
+        self.assertIn("TERRAIN_CLASS_IDS['gap_course']", edge)
+        self.assertIn("self.terrain_levels >= 2", edge)
+        self.assertNotIn("pit", edge)
+        heading = self.methods["_reward_cheat"]
+        self.assertIn("TERRAIN_CLASS_IDS['rough_ground']", heading)
 
     def test_reward_statistics_split_task_from_regularization_without_reordering(self):
         compute = self.methods["compute_reward"]

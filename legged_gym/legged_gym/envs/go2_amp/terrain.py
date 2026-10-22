@@ -5,50 +5,41 @@ from collections import Counter
 
 TERRAIN_NAMES = (
     "flat",
-    "rough_flat",
-    "smooth_slope",
-    "rough_slope",
-    "stairs",
-    "discrete_obstacles",
-    "hurdle",
-    "gap",
-    "pit",
+    "rough_ground",
+    "slope_course",
+    "stairs_course",
+    "low_obstacle_course",
+    "gap_course",
     "narrow_passage",
 )
 
 TERRAIN_CLASS_IDS = {name: index for index, name in enumerate(TERRAIN_NAMES)}
 
 TERRAIN_PROPORTIONS = (
-    0.10,
-    0.10,
-    0.10,
-    0.10,
     0.15,
-    0.10,
-    0.10,
-    0.10,
+    0.15,
+    0.20,
+    0.20,
+    0.15,
     0.10,
     0.05,
 )
 
 # Twenty physical columns make the percentages exact rather than approximate.
 TERRAIN_COLUMNS = (
-    "flat", "flat",
-    "rough_flat", "rough_flat",
-    "smooth_slope", "smooth_slope",
-    "rough_slope", "rough_slope",
-    "stairs", "stairs", "stairs",
-    "discrete_obstacles", "discrete_obstacles",
-    "hurdle", "hurdle",
-    "gap", "gap",
-    "pit", "pit",
+    "flat", "flat", "flat",
+    "rough_ground", "rough_ground", "rough_ground",
+    "slope_course", "slope_course", "slope_course", "slope_course",
+    "stairs_course", "stairs_course", "stairs_course", "stairs_course",
+    "low_obstacle_course", "low_obstacle_course", "low_obstacle_course",
+    "gap_course", "gap_course",
     "narrow_passage",
 )
 
 # Temporary compatibility name for configuration imports created before the
 # formal single-stage terrain contract was frozen.
 GO2_AMP_TERRAIN_COLUMNS = TERRAIN_COLUMNS
-TERRAIN_OVERVIEW_LEVELS = (0, 9, 19)
+TERRAIN_OVERVIEW_LEVELS = (0, 3, 6, 9)
 
 
 def terrain_overview_layout(levels=TERRAIN_OVERVIEW_LEVELS):
@@ -78,7 +69,7 @@ def terrain_overview_layout(levels=TERRAIN_OVERVIEW_LEVELS):
 
 
 def configure_evaluation_terrain_grid(cfg, columns, levels=None,
-                                      formal_num_rows=20):
+                                      formal_num_rows=10):
     """Configure the formal named generator for evaluation or inspection."""
     columns = tuple(columns)
     if not columns or any(name not in TERRAIN_NAMES for name in columns):
@@ -151,7 +142,7 @@ def freeze_evaluation_case(env, terrain, level, vx, yaw):
     """Place every environment on one exact case and freeze reset behavior."""
     if terrain not in TERRAIN_NAMES:
         raise ValueError("unknown Go2 AMP terrain: {}".format(terrain))
-    if terrain not in ("flat", "rough_flat") and float(yaw) != 0.0:
+    if terrain not in ("flat", "rough_ground") and float(yaw) != 0.0:
         raise ValueError("structured terrain evaluation requires yaw=0")
     columns = tuple(env.cfg.terrain.explicit_terrain_columns)
     if terrain not in columns:
@@ -237,7 +228,7 @@ def _like(target, values):
     return values
 
 
-def difficulty_for_level(level, num_rows=20):
+def difficulty_for_level(level, num_rows=10):
     """Map an explicit curriculum row to the closed difficulty interval [0, 1]."""
     if num_rows < 2 or level < 0 or level >= num_rows:
         raise ValueError("terrain level must be inside a curriculum with at least two rows")
@@ -246,7 +237,7 @@ def difficulty_for_level(level, num_rows=20):
 
 def next_curriculum_levels(levels, forward_commands, progress,
                            success_distance, early_failure,
-                           random_lower_levels, max_level=19):
+                           random_lower_levels, max_level=9):
     """Return curriculum levels after forward-only success/failure updates.
 
     Inputs may be NumPy arrays or PyTorch tensors.  A supplied random lower
@@ -266,3 +257,13 @@ def next_curriculum_levels(levels, forward_commands, progress,
     overflow = updated > max_level
     updated[overflow] = random_lower_levels[overflow]
     return updated
+
+
+def terrain_column_indices(num_envs, num_cols):
+    """Return bounded, near-even formal column indices for any env count."""
+    num_envs = int(num_envs)
+    num_cols = int(num_cols)
+    if num_envs <= 0 or num_cols <= 0:
+        raise ValueError("num_envs and num_cols must be positive")
+    return tuple(min(num_cols - 1, index * num_cols // num_envs)
+                 for index in range(num_envs))
