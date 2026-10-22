@@ -212,6 +212,62 @@ class TestAmpTerrainCurriculum(unittest.TestCase):
 
 
 class TestAmpTerrainConstruction(unittest.TestCase):
+    @staticmethod
+    def load_add_terrain_to_map():
+        path = ROOT / "legged_gym/legged_gym/utils/terrain.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        terrain_class = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "Terrain")
+        method = next(
+            node for node in terrain_class.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "add_terrain_to_map")
+        minimal_class = ast.ClassDef(
+            name="TerrainOriginHarness", bases=[], keywords=[],
+            body=[method], decorator_list=[])
+        module = ast.Module(body=[minimal_class], type_ignores=[])
+        ast.fix_missing_locations(module)
+        namespace = {"np": np}
+        exec(compile(module, str(path), "exec"), namespace)
+        return namespace["TerrainOriginHarness"]
+
+    def test_named_spawn_metadata_translates_without_changing_legacy_mix(self):
+        harness_type = self.load_add_terrain_to_map()
+        harness = harness_type()
+        harness.type = "mix"
+        harness.border = 0
+        harness.length_per_env_pixels = 80
+        harness.width_per_env_pixels = 80
+        harness.env_length = 8.0
+        harness.env_width = 8.0
+        harness.height_field_raw = np.zeros((160, 160), dtype=np.int16)
+        harness.env_origins = np.zeros((2, 2, 3), dtype=np.float64)
+        harness.terrain_type = np.zeros((2, 2), dtype=np.float64)
+
+        class Tile:
+            horizontal_scale = 0.1
+            vertical_scale = 0.005
+
+            def __init__(self, spawn=None, idx=4):
+                self.height_field_raw = np.zeros((80, 80), dtype=np.int16)
+                self.idx = idx
+                if spawn is not None:
+                    self.spawn_origin = spawn
+
+        named = Tile((0.65, 4.0, 0.0), idx=6)
+        harness.add_terrain_to_map(named, 1, 1)
+        np.testing.assert_allclose(harness.env_origins[1, 1],
+                                   [8.65, 12.0, 0.0])
+        self.assertEqual(harness.terrain_type[1, 1], 6)
+
+        legacy = Tile(idx=3)
+        legacy.height_field_raw[30:50, 30:50] = 20
+        harness.add_terrain_to_map(legacy, 0, 0)
+        np.testing.assert_allclose(harness.env_origins[0, 0],
+                                   [4.0, 4.0, 0.1])
+        self.assertEqual(harness.terrain_type[0, 0], 3)
+
     def test_explicit_curriculum_uses_closed_interval_without_changing_legacy(self):
         source = (ROOT / "legged_gym/legged_gym/utils/terrain.py").read_text(encoding="utf-8")
         self.assertIn("difficulty = level / (formal_num_rows - 1)", source)
