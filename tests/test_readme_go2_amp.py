@@ -65,6 +65,14 @@ class ReadmeGo2AmpWorkflowTest(unittest.TestCase):
         self.assertIn("`legged_gym/outputs/go2_amp/`", self.readme)
         self.assertIn("不得续训，也不得作为修正后 V1 的性能结论", self.readme)
 
+    def test_documents_cloud_acceptance_observability(self):
+        for fragment in (
+                "--terrain narrow_passage --level 9",
+                "nvidia-smi --query-compute-apps=used_memory",
+                "checkpoint_20.json",
+                "no_blocking_errors_found"):
+            self.assertIn(fragment, self.readme)
+
 
 if __name__ == "__main__":
     unittest.main()

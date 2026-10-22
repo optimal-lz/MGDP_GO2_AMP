@@ -178,6 +178,12 @@ python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp_v1
 python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain stairs_course --level 9 --vx 0.5 --yaw 0 --follow_camera
 ```
 
+最窄通道只需做一次能否进入和持续前进的直观验收：
+
+```bash
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain narrow_passage --level 9 --vx 0.4 --yaw 0 --follow_camera
+```
+
 结构化地形要求 `yaw=0`。省略 `--manifest` 时使用 `last.json`。Viewer 会显示机器人运动，并在 episode 结束时输出命令、实际速度、AMP reward 和失败原因。
 
 在策略验证前，可先打开不需要 checkpoint 的训练地形验收视图：
@@ -245,5 +251,16 @@ CSV 保留逐 case 数据与汇总，其中 `base_lin_vel_z_sq` 是逐步基座�
 4. paired resume 后确认机器人从保存的地形层级开始新 episode，第一步前 WM token 已刷新，且 TensorBoard step 单调。
 5. Viewer 在 `flat`、`stairs_course` 及其他代表地形上冻结运行，WM 图片持续更新。
 6. AMP/noAMP 同迭代对照输出两份 CSV 和四张 PNG；其中 WM MSE 按环境并只按真实深度刷新帧统计，再由人工结合运动效果审阅。
+
+上述各节的命令就是执行顺序。全负载短跑期间可在另一终端采集显存；训练结束后检查新目录中的 manifest 和日志：
+
+```bash
+nvidia-smi --query-compute-apps=used_memory --format=csv -l 1
+cat legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1/checkpoints/last.json
+ls -lh legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1/checkpoints/checkpoint_20.json
+grep -niE 'foundLostAggregatePairsCapacity|invalid parameter|out of memory|CUDA error|(^|[^[:alpha:]])(nan|inf)([^[:alpha:]]|$)' /tmp/go2_amp_v1_*.log || echo "no_blocking_errors_found"
+```
+
+只有完整测试、28 地块总览、代表单 case Viewer、64 环境严格续训、4096 环境短跑及上述 artifact/日志/显存检查全部通过后，才进入同一新根目录下的 1000、2000、5000 配对训练与固定评估。
 
 参见 [`SOURCES.md`](SOURCES.md) 了解参考项目与数据来源。
