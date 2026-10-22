@@ -164,14 +164,21 @@ def _print_episode(infos, env_id, terrain, level, amp_reward):
             command, actual, terrain, level, amp_reward, failure))
 
 
+def validate_case(terrain, level, yaw):
+    """Validate one formal deterministic Viewer case."""
+    if terrain not in TERRAIN_NAMES:
+        raise ValueError("unknown formal terrain: {}".format(terrain))
+    if not 0 <= int(level) <= 9:
+        raise ValueError("--level must be in [0, 9]")
+    if terrain not in ("flat", "rough_ground") and float(yaw) != 0.0:
+        raise ValueError("structured terrain visualization requires yaw=0")
+
+
 def main():
     args = parse_args()
-    if not 0 <= args.level <= 19:
-        raise ValueError("--level must be in [0, 19]")
+    validate_case(args.terrain, args.level, args.yaw)
     if not 0 <= args.env_id < args.num_envs:
         raise ValueError("--env_id must select one of --num_envs")
-    if args.terrain not in ("flat", "rough_flat") and args.yaw != 0.0:
-        raise ValueError("structured terrain visualization requires yaw=0")
     if args.fps <= 0 or args.duration <= 0:
         raise ValueError("--fps and --duration must be positive")
     if args.snapshot_interval <= 0:

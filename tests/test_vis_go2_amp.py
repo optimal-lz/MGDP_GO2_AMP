@@ -87,6 +87,28 @@ class TestGo2AmpViewer(unittest.TestCase):
         self.assertIn("assert_evaluation_case", main)
         self.assertNotIn("env_cfg.terrain.curriculum = False", main)
 
+    def test_case_validation_uses_revised_names_and_level_bounds(self):
+        self.assertIn("validate_case", self.functions)
+        node = next(item for item in self.tree.body
+                    if isinstance(item, ast.FunctionDef)
+                    and item.name == "validate_case")
+        module = ast.Module(body=[node], type_ignores=[])
+        ast.fix_missing_locations(module)
+        names = (
+            "flat", "rough_ground", "slope_course", "stairs_course",
+            "low_obstacle_course", "gap_course", "narrow_passage")
+        namespace = {"TERRAIN_NAMES": names}
+        exec(compile(module, str(SCRIPT), "exec"), namespace)
+        validate = namespace["validate_case"]
+        validate("rough_ground", 9, 0.5)
+        validate("stairs_course", 0, 0.0)
+        with self.assertRaisesRegex(ValueError, "terrain"):
+            validate("pit", 0, 0.0)
+        with self.assertRaisesRegex(ValueError, "level"):
+            validate("flat", 10, 0.0)
+        with self.assertRaisesRegex(ValueError, "yaw"):
+            validate("gap_course", 9, 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
