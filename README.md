@@ -18,11 +18,11 @@
 - idle 命令精确为 `vx=0, yaw=0`，只使用 task、regularization 和 safety reward，也不写 AMP policy replay。其余均为 locomotion 命令并启用 AMP。
 - 专家库只启用前进和左右转向八个文件，前进/转向组权重为 80%/20%。站立、后退、横向及未启用动作仍保留在数据目录，但不进入判别器分布。
 - `feet_air_time` 作为弱运动支架保留；`dof_error`、`feet_edge`、`cheat`、`stuck` 作为必要控制/安全约束保留。手工 trot、bound、pace 和 stand-still 风格项关闭。
-- 单阶段从十类低难度地形联合训练，不设独立 WM 预训练、task-only 阶段、AMP 系数渐变、地形锚点或难度解锁。
+- 单阶段从七类地形联合训练，不设独立 WM 预训练、task-only 阶段、AMP 系数渐变、地形锚点或难度解锁。
 - 每轮顺序固定为：rollout 内 WM 在线更新 → rollout 后 4 次 WM 更新 → GAE → PPO → 20 次判别器更新。第 0 个 rollout 的 AMP contribution 为 0，从下一轮起使用固定系数。
 - AMP 和 noAMP 对照除 AMP 模块及奖励外完全一致。noAMP 不构造判别器、专家数据集或 AMP replay。
 
-正式十类地形为：`flat`、`rough_flat`、`smooth_slope`、`rough_slope`、`stairs`、`discrete_obstacles`、`hurdle`、`gap`、`pit`、`narrow_passage`。低矮钻越类地形不在范围内。平地与粗糙平地允许前进和转向，其他结构化地形只训练前进穿越。
+修正后的正式七类地形为：`flat`、`rough_ground`、`slope_course`、`stairs_course`、`low_obstacle_course`、`gap_course`、`narrow_passage`。训练难度为 level 0..9；平地与粗糙地面允许前进和转向，其他结构化地形只训练前进穿越。各结构化地形都从前置平地起步，坡面与楼梯在顶部保留随高度对齐的缓冲平台，不再生成随难度加深的中央坑。
 
 ## 运行环境
 
@@ -45,7 +45,9 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 
 Windows 当前工作区没有安装 PyTorch、Isaac Gym 和匹配的 CUDA 栈，因此这里只能完成纯 Python、静态与源码编译验证；GPU 训练和 Viewer 验证必须在 RTX 4090 云服务器上执行。
 
-当前运行时修正版改变了 Actor GRU 所属 checkpoint 和完整配置哈希。2026-10-17 修正前生成的 policy/WM checkpoint 与正式训练不兼容，不要用它们续训；云端应从当前代码创建新的 run。完整本地回归为 109 项测试，其中 96 项通过、13 项 PyTorch 训练环境测试按声明跳过；云端必须确认这些张量测试实际执行而不是继续显示 skip。
+当前运行时修正版改变了 Actor GRU 所属 checkpoint、地形生成协议和完整配置哈希。修正前生成的 policy/WM checkpoint 与正式训练不兼容，不要用它们续训；云端应从当前代码创建新的 run。云端仍须确认 PyTorch/Isaac Gym 张量测试实际执行，而不是继续显示 skip。
+
+旧目录 `legged_gym/outputs/go2_amp/` 中的 64/4096 环境运行、严格续训、显存和数值稳定性结果，只保留为修正前的工程证据。由于其训练地形不符合现行设计，这些旧 run 不得续训，也不得作为修正后 V1 的性能结论。修正后的全部短跑、正式训练、Viewer 和配对评估统一写入 `legged_gym/outputs/go2_amp_v1/`；当前 README 不宣称这套新地形已经完成云端验证。
 
 ## 统一训练入口
 
@@ -69,15 +71,15 @@ python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 64 
 对应目录是：
 
 ```text
-legged_gym/outputs/go2_amp/amp_coef0p01_seed1_env64/
-legged_gym/outputs/go2_amp/no_amp_seed1_env64/
+legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1_env64/
+legged_gym/outputs/go2_amp_v1/no_amp_seed1_env64/
 ```
 
 再分别从刚保存的 manifest 续训到绝对目标 20，验证优化器、WM、AMP 与 RNG 状态均能恢复：
 
 ```bash
-python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 64 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1_env64 --headless
-python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 64 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1_env64 --headless
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 64 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1_env64 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 64 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp_v1/no_amp_seed1_env64 --headless
 ```
 
 64 环境只验证集成，不代表 4090 上的正式吞吐、显存占用或控制效果。
@@ -95,7 +97,7 @@ python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 -
 随后在同一正式目录续训到绝对目标 20，检查 TensorBoard step 单调，以及 checkpoint、RNG 和地形等级连续：
 
 ```bash
-python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 20 --resume_from legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --headless
 ```
 
 ### 正式 AMP/noAMP 对照
@@ -103,7 +105,7 @@ python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 -
 AMP 的 4096 环境短跑已经建立正式目录，因此继续续训到 1000：
 
 ```bash
-python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 1000 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 1000 --resume_from legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --headless
 ```
 
 noAMP 从零开始训练到同一绝对目标：
@@ -115,15 +117,15 @@ python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 409
 审阅 1000 轮结果后，分别续训到 2000：
 
 ```bash
-python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 2000 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
-python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 2000 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 2000 --resume_from legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 2000 --resume_from legged_gym/outputs/go2_amp_v1/no_amp_seed1 --headless
 ```
 
 通过中期检查后续训到 5000：
 
 ```bash
-python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --headless
-python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp/no_amp_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --headless
+python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 4096 --target_iteration 5000 --resume_from legged_gym/outputs/go2_amp_v1/no_amp_seed1 --headless
 ```
 
 若要新建不同 AMP 系数实验，可在首次启动时传入例如 `--amp_coef 0.005`，将得到独立目录 `amp_coef0p005_seed1`。续训必须保持 mode、系数、seed、环境数与完整配置一致；noAMP 不接受 AMP 系数参数。
@@ -133,7 +135,7 @@ python legged_gym/scripts/train_go2_amp.py --mode no_amp --seed 1 --num_envs 409
 每个实验目录结构为：
 
 ```text
-legged_gym/outputs/go2_amp/<run_name>/
+legged_gym/outputs/go2_amp_v1/<run_name>/
 ├── config.json
 ├── run.json
 ├── checkpoints/
@@ -157,7 +159,7 @@ policy checkpoint 包含 Actor 的 64D GRU、其余 PPO 网络与优化器、地
 ## TensorBoard
 
 ```bash
-tensorboard --logdir legged_gym/outputs/go2_amp
+tensorboard --logdir legged_gym/outputs/go2_amp_v1
 ```
 
 每轮只记录精简核心曲线：task reward、AMP contribution、total reward、PPO 更新指标以及采样/学习耗时；WM loss 是该轮全部在线和额外 WM optimizer step 的均值。每 10 轮补充 terrain mean level 与 action std。AMP 模式记录判别器指标，noAMP 不产生判别器训练曲线且 AMP contribution 必须恒为 0。TensorBoard 用于诊断，不改变训练流程。
@@ -167,13 +169,13 @@ tensorboard --logdir legged_gym/outputs/go2_amp
 Viewer 严格加载一对 policy/WM checkpoint，冻结课程、随机化和训练更新，并允许指定单一地形、等级与命令。地形和命令在每次 reset 后都会重新校验，实际 case 与请求不一致时直接报错。平地转向示例：
 
 ```bash
-python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain flat --level 5 --vx 0.4 --yaw 0.6 --follow_camera
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain flat --level 5 --vx 0.4 --yaw 0.6 --follow_camera
 ```
 
 楼梯前进示例：
 
 ```bash
-python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain stairs --level 9 --vx 0.5 --yaw 0 --follow_camera
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --manifest checkpoint_1000.json --terrain stairs_course --level 9 --vx 0.5 --yaw 0 --follow_camera
 ```
 
 结构化地形要求 `yaw=0`。省略 `--manifest` 时使用 `last.json`。Viewer 会显示机器人运动，并在 episode 结束时输出命令、实际速度、AMP reward 和失败原因。
@@ -184,7 +186,7 @@ python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/am
 python legged_gym/scripts/view_go2_amp_terrains.py
 ```
 
-该 Viewer 只使用正式训练的命名地形生成器，按十类地形和 level 0/9/19 生成30个地块。固定基座机器人仅作为尺寸参照；终端一次性打印地形名称、代表 level、环境编号与冻结训练比例。30个展示地块对十类地形等量取样，终端比例表示正式训练权重，不表示展示面积。
+该 Viewer 只使用正式训练的命名地形生成器，按七类地形和 level 0/3/6/9 生成 28 个地块。固定基座机器人仅作为尺寸参照；终端一次性打印地形名称、代表 level、环境编号与冻结训练比例。28 个展示地块对七类地形等量取样，终端比例表示正式训练权重，不表示展示面积。
 
 WM 对比图写入：
 
@@ -198,7 +200,7 @@ eval/wm/checkpoint_1000/<terrain>_level_<level>/height_latest.png
 视频录制是可选工具，不是默认验收步骤。安装 FFmpeg 且使用 Isaac Gym Viewer 时可自行决定录制：
 
 ```bash
-python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/amp_coef0p01_seed1 --terrain stairs --level 9 --vx 0.5 --yaw 0 --record --duration 20 --fps 30 --record_output stairs_level9.mp4
+python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1 --terrain stairs_course --level 9 --vx 0.5 --yaw 0 --record --duration 20 --fps 30 --record_output stairs_course_level9.mp4
 ```
 
 视频只允许写入所选 run 的 `eval/videos/` 下。
@@ -211,12 +213,12 @@ python legged_gym/scripts/vis_go2_amp.py --run_dir legged_gym/outputs/go2_amp/am
 
 ```bash
 python legged_gym/scripts/evaluate_go2_amp_comparison.py \
-  --amp_manifest legged_gym/outputs/go2_amp/amp_coef0p01_seed1/checkpoints/checkpoint_1000.json \
-  --no_amp_manifest legged_gym/outputs/go2_amp/no_amp_seed1/checkpoints/checkpoint_1000.json \
+  --amp_manifest legged_gym/outputs/go2_amp_v1/amp_coef0p01_seed1/checkpoints/checkpoint_1000.json \
+  --no_amp_manifest legged_gym/outputs/go2_amp_v1/no_amp_seed1/checkpoints/checkpoint_1000.json \
   --episodes_per_case 20
 ```
 
-评估固定覆盖 72 个 case：十类地形的前进命令，以及 `flat`/`rough_flat` 的转向命令；两个策略使用相同 case、episode seed 和冻结环境。noAMP 策略也使用 AMP run 的同一个冻结判别器与 normalizer 离线打分，使 style score 可直接比较，评估过程不更新任何网络或 replay。
+评估固定覆盖 72 个 case：七类地形在 level 0/3/6/9 上各使用 `vx=0.4/0.8` 的 56 个前进 case，以及 `flat`/`rough_ground` 在相同四级上各使用 `yaw=-0.5/0.5` 的 16 个转向 case。两个策略独立运行，但使用完全相同的 case、episode seed 和冻结环境。noAMP 策略也使用 AMP run 的同一个冻结判别器与 normalizer 离线打分，使 style score 可直接比较；评估过程不更新任何网络或 replay。
 
 默认只生成以下文件，不生成 Markdown 报告：
 
@@ -229,11 +231,11 @@ eval/comparison/smoothness.png
 eval/comparison/style_score.png
 ```
 
-CSV 保留逐 case 数据与汇总，PNG 用于快速对照完成率、速度追踪、平滑/力矩和 AMP style score。后续根据这些结果与 TensorBoard 曲线共同分析，再决定是否改系数或训练设置。
+CSV 保留逐 case 数据与汇总，其中 `base_lin_vel_z_sq` 是逐步基座竖直速度平方的 episode 均值，用来单独观察不同地形上的上下振动，避免只凭总 reward 判断 `lin_vel_z` 惩罚是否合适。PNG 用于快速对照完成率、速度追踪、平滑/力矩和 AMP style score。后续根据这些结果与 TensorBoard 曲线共同分析，再决定是否改系数或训练设置。
 
 ## 验收边界
 
-本地测试和 64 环境短跑只证明代码集成；4096×10 只证明单卡全负载能够运行。运动控制任务的最终判断必须基于 1000/2000/5000 迭代的配对实验、十类地形 Viewer 观察、WM 图和固定对照 CSV/PNG，不能用某一次短跑或单个 reward 曲线代替。
+本地测试和 64 环境短跑只证明代码集成；4096×10 只证明单卡全负载能够运行。运动控制任务的最终判断必须基于修正后输出根目录中的 1000/2000/5000 迭代配对实验、七类地形 Viewer 观察、WM 图和固定对照 CSV/PNG，不能用修正前结果、某一次短跑或单个 reward 曲线代替。
 
 云服务器首次执行时依次确认：
 
@@ -241,7 +243,7 @@ CSV 保留逐 case 数据与汇总，PNG 用于快速对照完成率、速度追
 2. 4096 环境 AMP 运行 10 轮无 OOM、NaN/Inf，policy/WM/D 与 TensorBoard 指标正常。
 3. 用同一正式目录续训，checkpoint 迭代单调且 `last.json` 正确指向最新 manifest。
 4. paired resume 后确认机器人从保存的地形层级开始新 episode，第一步前 WM token 已刷新，且 TensorBoard step 单调。
-5. Viewer 在 flat、stairs 及其他代表地形上冻结运行，WM 图片持续更新。
+5. Viewer 在 `flat`、`stairs_course` 及其他代表地形上冻结运行，WM 图片持续更新。
 6. AMP/noAMP 同迭代对照输出两份 CSV 和四张 PNG；其中 WM MSE 按环境并只按真实深度刷新帧统计，再由人工结合运动效果审阅。
 
 参见 [`SOURCES.md`](SOURCES.md) 了解参考项目与数据来源。
